@@ -28,6 +28,13 @@
   let query = $state('');
   let hidden = $state({});
   let counts = $state({});
+  // names on the map: off by default (only drives are labeled; hover shows the rest)
+  let showNames = $state(false);
+  try { showNames = localStorage.getItem('cartographer.showNames') === '1'; } catch {}
+  function toggleNames() {
+    showNames = !showNames;
+    try { localStorage.setItem('cartographer.showNames', showNames ? '1' : '0'); } catch {}
+  }
 
   // layout editing
   let layout = $state(defaultLayout());
@@ -146,7 +153,7 @@
   const occupied = [];
   const hits = (a) => occupied.some((b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y);
   function drawLabel(ctx, d, s) {
-    if (!d.label) return;
+    if (!d.label || d.hoveredNow) return; // the hover card already shows it
     const size = s.labelSize;
     ctx.font = `${s.labelWeight} ${size}px ${s.labelFont}`;
     const w = ctx.measureText(d.label).width + 10;
@@ -182,7 +189,9 @@
     const label = d.label ?? '';
     const w = ctx.measureText(label).width + 16;
     const h = size + 12;
-    const x = d.x + d.size + 6;
+    const cw = ctx.canvas.width / (window.devicePixelRatio || 1);
+    let x = d.x + d.size + 6;
+    if (x + w > cw - 2) x = d.x - d.size - 6 - w; // flip left near the right edge
     const y = d.y - h / 2;
     ctx.fillStyle = 'rgba(10,15,24,0.92)';
     ctx.strokeStyle = 'rgba(94,234,212,0.6)';
@@ -217,7 +226,7 @@
   }
 
   $effect(() => {
-    hovered; selected; query; hidden; editing; selectedPoint; pinnedCount;
+    hovered; selected; query; hidden; editing; selectedPoint; pinnedCount; showNames;
     renderer?.refresh({ skipIndexation: true });
   });
 
@@ -360,8 +369,11 @@
           res.zIndex = 1;
           if (f?.has(id) || (q && matches(id))) res.forceLabel = true;
         }
+        const shown = a.kind === 'drive' || id === selected || f?.has(id) || (q && matches(id));
+        if (!showNames && !shown) res.label = '';
         if (editing && layout.pinned[id]) { res.label = `📌 ${a.label}`; res.forceLabel = true; }
         if (id === selected) { res.highlighted = true; res.zIndex = 2; }
+        res.hoveredNow = id === hovered;
         return res;
       },
       edgeReducer: (id, a) => {
@@ -444,6 +456,9 @@
   <div class="tools">
     <input placeholder="Search the map…  (Enter to jump)" bind:value={query} onkeydown={onSearchKey} />
     <button title="Fit the whole map" onclick={resetView}>⤢</button>
+    <button class="switch" class:on={showNames} role="switch" aria-checked={showNames} title="Show every name on the map" onclick={toggleNames}>
+      <span class="track"><span class="knob"></span></span>Names
+    </button>
     <button class="edit" class:on={editing} onclick={() => { editing = !editing; placing = null; }}>
       {editing ? 'Done editing' : '✎ Edit layout'}{dirty ? ' •' : ''}
     </button>
@@ -579,6 +594,12 @@
   .tools button { min-width: 34px; padding: 0 10px; border-radius: 9px; border: 1px solid #22304a; background: rgba(13,19,30,0.9); text-align: center; color: var(--muted); font-size: 12.5px; }
   .tools button:hover { color: var(--accent); border-color: var(--accent); }
   .tools button.edit.on { color: #fbbf24; border-color: #fbbf24; }
+  .tools .switch { display: inline-flex; align-items: center; gap: 8px; color: #b8c4d6; }
+  .tools .switch.on { color: var(--text); border-color: #2c5f5a; }
+  .track { width: 30px; height: 17px; border-radius: 99px; background: #233044; position: relative; transition: background 0.15s; }
+  .knob { position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: #8a9bb3; transition: left 0.15s, background 0.15s; }
+  .switch.on .track { background: #134e4a; }
+  .switch.on .knob { left: 15px; background: #5eead4; }
   .hint { position: absolute; top: 58px; left: 12px; padding: 7px 11px; border-radius: 8px; background: rgba(40,30,8,0.92); border: 1px solid #a16207; font-size: 12.5px; color: #fde68a; }
   .hint button { color: #fbbf24; text-decoration: underline; }
   .legend { position: absolute; left: 12px; bottom: 12px; display: flex; flex-wrap: wrap; gap: 6px; max-width: calc(100% - 24px); }
