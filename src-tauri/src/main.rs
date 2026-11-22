@@ -174,6 +174,28 @@ fn graph(state: State<AppState>) -> Result<graph::GraphData, String> {
     graph::build(&c).map_err(err)
 }
 
+/// The map's layout (forces, radiate/pull/push points, pinned and last positions).
+#[tauri::command(async)]
+fn load_layout() -> Option<serde_json::Value> {
+    serde_json::from_slice(&std::fs::read(helper::data_dir().join("layout.json")).ok()?).ok()
+}
+
+#[tauri::command(async)]
+fn save_layout(layout: serde_json::Value) -> Result<(), String> {
+    let p = helper::data_dir().join("layout.json");
+    std::fs::create_dir_all(helper::data_dir()).map_err(err)?;
+    std::fs::write(&p, serde_json::to_vec_pretty(&layout).map_err(err)?).map_err(err)
+}
+
+#[tauri::command(async)]
+fn reset_layout() -> Result<(), String> {
+    let p = helper::data_dir().join("layout.json");
+    if p.exists() {
+        std::fs::remove_file(p).map_err(err)?;
+    }
+    Ok(())
+}
+
 #[tauri::command(async)]
 fn helper_status() -> bool {
     helper::installed()
@@ -314,7 +336,7 @@ fn main() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![drives, scans, view, graph, is_scanning, start_scan, helper_status, set_fast_scan, reveal, open_path])
+        .invoke_handler(tauri::generate_handler![drives, scans, view, graph, load_layout, save_layout, reset_layout, is_scanning, start_scan, helper_status, set_fast_scan, reveal, open_path])
         .build(tauri::generate_context!())
         .expect("error while building Cartographer");
 
