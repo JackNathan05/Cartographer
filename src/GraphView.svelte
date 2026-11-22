@@ -77,12 +77,19 @@
       });
     }
 
-    // seed positions: drives on a ring, everything else near its parent (stable between runs)
+    // seed positions: drives far apart on a ring, everything else near its parent (stable between runs)
     const drives = data.nodes.filter((n) => n.kind === 'drive');
     drives.forEach((d, i) => {
       const a = (i / drives.length) * Math.PI * 2;
-      g.mergeNodeAttributes(d.id, { x: Math.cos(a) * 100, y: Math.sin(a) * 100 });
+      g.mergeNodeAttributes(d.id, { x: Math.cos(a) * 400, y: Math.sin(a) * 400 });
     });
+    const parentOf = new Map();
+    g.forEachEdge((e, a, s, t) => { if (a.kind === 'lives_on') parentOf.set(s, t); });
+    const driveOf = (id) => {
+      let cur = id;
+      for (let i = 0; i < 64 && parentOf.has(cur); i++) cur = parentOf.get(cur);
+      return cur.startsWith('drive:') ? cur : null;
+    };
     const placed = new Set(drives.map((d) => d.id));
     let frontier = drives.map((d) => d.id);
     while (frontier.length) {
@@ -90,26 +97,37 @@
       for (const p of frontier) {
         const px = g.getNodeAttribute(p, 'x');
         const py = g.getNodeAttribute(p, 'y');
-        g.forEachInNeighbor(p, (child) => {
-          if (placed.has(child)) return;
-          const a = hash(child) * Math.PI * 2;
+        g.forEachInEdge(p, (e, a, child) => {
+          if (a.kind !== 'lives_on' || placed.has(child)) return;
+          const ang = hash(child) * Math.PI * 2;
           const r = 12 + hash(child + '#') * 18;
-          g.mergeNodeAttributes(child, { x: px + Math.cos(a) * r, y: py + Math.sin(a) * r });
+          g.mergeNodeAttributes(child, { x: px + Math.cos(ang) * r, y: py + Math.sin(ang) * r });
           placed.add(child);
           next.push(child);
         });
       }
       frontier = next;
     }
-    g.forEachNode((id, a) => {
+    g.forEachNode((id) => {
       if (!placed.has(id)) g.mergeNodeAttributes(id, { x: (hash(id) - 0.5) * 200, y: (hash(id + '!') - 0.5) * 200 });
     });
 
-    const settings = forceAtlas2.inferSettings(g);
-    forceAtlas2.assign(g, {
-      iterations: 400,
-      settings: { ...settings, gravity: 0.5, scalingRatio: 22, slowDown: 2, barnesHutOptimize: g.order > 400, edgeWeightInfluence: 1 },
+    // The layout runs on its own copy of the graph: only "lives in" edges (backup links cross
+    // drives and would drag them together), plus a weak invisible tether from every node to
+    // its drive. Each drive ends up as its own clump; nothing extra is drawn.
+    const L = new Graph({ type: 'undirected' });
+    g.forEachNode((id, a) => L.addNode(id, { x: a.x, y: a.y, size: a.size }));
+    g.forEachEdge((e, a, s, t) => { if (a.kind === 'lives_on') L.mergeEdge(s, t, { weight: 3 }); });
+    g.forEachNode((id) => {
+      const d = driveOf(id);
+      if (d && d !== id && !L.hasEdge(id, d)) L.addEdge(id, d, { weight: 0.9 });
     });
+    const settings = forceAtlas2.inferSettings(L);
+    forceAtlas2.assign(L, {
+      iterations: 600,
+      settings: { ...settings, gravity: 0.12, scalingRatio: 10, slowDown: 3, outboundAttractionDistribution: true, barnesHutOptimize: L.order > 400, edgeWeightInfluence: 1 },
+    });
+    L.forEachNode((id, a) => g.mergeNodeAttributes(id, { x: a.x, y: a.y }));
     return g;
   }
 
