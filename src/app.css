@@ -104,3 +104,5 @@ footer .warn { color: var(--warn); }
 .tabs button:not(.on):hover { color: var(--text); }
 .rebuild { padding: 5px 10px; border-radius: 7px; border: 1px solid var(--line); font-size: 12px; color: var(--muted); }
 .rebuild:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+
+.body.single { grid-template-columns: minmax(0, 1fr); }

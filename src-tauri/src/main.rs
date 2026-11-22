@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod db;
+mod backups;
 mod drives;
 mod graph;
 mod helper;
@@ -174,6 +175,12 @@ fn graph(state: State<AppState>) -> Result<graph::GraphData, String> {
     graph::build(&c).map_err(err)
 }
 
+#[tauri::command(async)]
+fn backup_report(state: State<AppState>) -> Result<backups::Report, String> {
+    let c = state.conn.lock().map_err(err)?;
+    backups::report(&c).map_err(err)
+}
+
 /// The map's layout (forces, radiate/pull/push points, pinned and last positions).
 #[tauri::command(async)]
 fn load_layout() -> Option<serde_json::Value> {
@@ -292,6 +299,15 @@ fn main() {
             }
             return;
         }
+        Some("--backup-dump") => {
+            let out = args.get(2).cloned().unwrap_or_else(|| "backups.json".into());
+            if let Ok(c) = db::open(&helper::data_dir().join("index.db")) {
+                if let Ok(r) = backups::report(&c) {
+                    let _ = std::fs::write(out, serde_json::to_vec_pretty(&r).unwrap_or_default());
+                }
+            }
+            return;
+        }
         Some("--helper") => std::process::exit(helper::run()),
         Some("--install-helper") => std::process::exit(helper::install()),
         Some("--uninstall-helper") => std::process::exit(helper::uninstall()),
@@ -336,7 +352,7 @@ fn main() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![drives, scans, view, graph, load_layout, save_layout, reset_layout, is_scanning, start_scan, helper_status, set_fast_scan, reveal, open_path])
+        .invoke_handler(tauri::generate_handler![drives, scans, view, graph, backup_report, load_layout, save_layout, reset_layout, is_scanning, start_scan, helper_status, set_fast_scan, reveal, open_path])
         .build(tauri::generate_context!())
         .expect("error while building Cartographer");
 

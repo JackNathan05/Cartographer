@@ -68,7 +68,7 @@ pub fn load_config() -> Config {
 }
 
 /// "c:/Foo/bar/" -> "C:\Foo\bar"; drive roots keep their slash ("C:\").
-fn norm(p: &str) -> String {
+pub(crate) fn norm(p: &str) -> String {
     let mut s = p.trim().trim_matches('"').replace('/', "\\");
     if let Some(rest) = s.strip_prefix(r"\\?\") {
         s = rest.to_string();
@@ -87,11 +87,11 @@ fn norm(p: &str) -> String {
     s
 }
 
-fn key(p: &str) -> String {
+pub(crate) fn key(p: &str) -> String {
     norm(p).to_lowercase()
 }
 
-fn parent(p: &str) -> Option<String> {
+pub(crate) fn parent(p: &str) -> Option<String> {
     let p = norm(p);
     if p.len() <= 3 {
         return None;
@@ -100,12 +100,12 @@ fn parent(p: &str) -> Option<String> {
     Some(if i <= 2 { p[..3].to_string() } else { p[..i].to_string() })
 }
 
-fn last_segment(p: &str) -> String {
+pub(crate) fn last_segment(p: &str) -> String {
     let p = norm(p);
     p.rsplit('\\').next().unwrap_or(&p).to_string()
 }
 
-fn under(path_key: &str, root_key: &str) -> bool {
+pub(crate) fn under(path_key: &str, root_key: &str) -> bool {
     path_key == root_key
         || (path_key.starts_with(root_key)
             && (root_key.ends_with('\\') || path_key.as_bytes().get(root_key.len()) == Some(&b'\\')))
@@ -274,12 +274,12 @@ fn installed_apps(out: &mut Vec<Leaf>) {
 
 // ---------------------------------------------------------------- index lookups
 
-struct DirInfo {
-    id: i64,
-    scan: i64,
-    path: String,
-    size: i64,
-    newest: i64,
+pub(crate) struct DirInfo {
+    pub id: i64,
+    pub scan: i64,
+    pub path: String,
+    pub size: i64,
+    pub newest: i64,
 }
 
 fn latest_scans(conn: &Connection) -> rusqlite::Result<Vec<(i64, String, i64)>> {
@@ -288,7 +288,7 @@ fn latest_scans(conn: &Connection) -> rusqlite::Result<Vec<(i64, String, i64)>> 
     r.collect()
 }
 
-fn lookup(conn: &Connection, keys: &HashSet<String>) -> rusqlite::Result<HashMap<String, DirInfo>> {
+pub(crate) fn lookup(conn: &Connection, keys: &HashSet<String>) -> rusqlite::Result<HashMap<String, DirInfo>> {
     let json = serde_json::to_string(&keys.iter().collect::<Vec<_>>()).unwrap_or_else(|_| "[]".into());
     let mut s = conn.prepare(
         "SELECT id, scan_id, path, size, newest FROM dirs WHERE lower(path) IN (SELECT value FROM json_each(?1))",
@@ -416,12 +416,6 @@ pub fn build(conn: &Connection) -> rusqlite::Result<GraphData> {
     for (p, _) in &tops {
         add_chain(p, &mut want);
     }
-    for b in &cfg.backups {
-        add_chain(&b.target, &mut want);
-        for s in &b.sources {
-            add_chain(s, &mut want);
-        }
-    }
     let info = lookup(conn, &want)?;
 
     let mut nodes: Vec<Node> = Vec::new();
@@ -492,30 +486,7 @@ pub fn build(conn: &Connection) -> rusqlite::Result<GraphData> {
         links.push(Link { source: id, target: up, kind: "lives_on" });
     }
 
-    // backups
-    let mut protected_sources: HashSet<String> = HashSet::new();
-    for b in &cfg.backups {
-        let id = format!("backup:{}", b.name);
-        let t = norm(&b.target);
-        let i = info.get(&t.to_lowercase());
-        let drive_id = format!("drive:{}", &t[..1].to_uppercase());
-        if !index.contains_key(&drive_id) {
-            continue;
-        }
-        index.insert(id.clone(), nodes.len());
-        nodes.push(Node {
-            id: id.clone(), kind: "backup", label: b.name.clone(), path: Some(t.clone()), size: i.map(|x| x.size).unwrap_or(0),
-            newest: i.map(|x| x.newest).unwrap_or(0), scan_id: i.map(|x| x.scan), dir_id: i.map(|x| x.id),
-            backed_up: None, backups: vec![], detail: Some(format!("{} sources", b.sources.len())),
-        });
-        links.push(Link { source: id.clone(), target: drive_id, kind: "lives_on" });
-        for s in &b.sources {
-            if let Some(src) = ensure_folder(s, &info, &mut nodes, &mut index, &mut links) {
-                protected_sources.insert(src.clone());
-                links.push(Link { source: src, target: id.clone(), kind: "backed_up_to" });
-            }
-        }
-    }
+    // backups live in their own view now (backups.rs); the map only colors coverage
 
     // backup coverage for everything with a path
     for n in nodes.iter_mut() {

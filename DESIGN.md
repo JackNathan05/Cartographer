@@ -259,3 +259,12 @@ Rust is a good fit for the scanner and file actions (speed + safety).
 | Single-child folder chains collapsed | Done |
 | Settings UI for backups | Not started (config file for now) |
 | "Depends on" links (services, venvs) | Not started |
+
+### Map layout + Backups view (2026-11-22)
+| Item | State |
+|---|---|
+| Live, editable map layout (d3-force) | Done: drive-vs-drive repulsion, radiate/pull/push points, drag to pin, force sliders, saved to `layout.json` |
+| Backup nodes/lines removed from the map | Done: the map only colors coverage (red = not backed up) |
+| Backups view | Done: destination cards (connected, last activity, stored, free space), source → destination flow diagram, per-drive coverage bars (2+ / 1 / yours unprotected / reinstallable), not-backed-up vs backed-up folder lists |
+| Backup editor UI (instead of hand-editing config.json) | Not started |
+| Real "last run" from backup logs / tool integrations | Heuristic only (newest timestamp in target + nearby logs) |

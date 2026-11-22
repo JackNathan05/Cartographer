@@ -15,7 +15,6 @@
     game: { label: 'Games', color: '#4ade80' },
     app: { label: 'Apps', color: '#a78bfa' },
     service: { label: 'Services', color: '#fb923c' },
-    backup: { label: 'Backups', color: '#2dd4bf' },
   };
   const WARN = '#f87171';
   const DIM = '#1a2333';
@@ -45,7 +44,6 @@
 
   function nodeSize(n) {
     if (n.kind === 'drive') return 18;
-    if (n.kind === 'backup') return 12;
     const gb = Math.max(n.size, 0) / 1073741824;
     const s = Math.min(22, 3 + Math.sqrt(gb) * 2.2);
     return n.kind === 'folder' ? Math.max(3, s * 0.6) : s;

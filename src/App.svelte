@@ -5,6 +5,7 @@
   import { onMount } from 'svelte';
   import Treemap from './Treemap.svelte';
   import GraphView from './GraphView.svelte';
+  import BackupView from './BackupView.svelte';
   import { fmtBytes, fmtCount, fmtAgo, fmtDate } from './format.js';
 
   let drives = $state([]);
@@ -19,6 +20,7 @@
   let tab = $state('map');
   let graphData = $state(null);
   let graphLoading = $state(false);
+  let backupData = $state(null);
 
   const scanFor = (letter) => scans.find((s) => s.root.toUpperCase().startsWith(letter + ':'));
   const kids = $derived(view?.node?.children ?? []);
@@ -82,6 +84,12 @@
     graphLoading = false;
   }
 
+  async function showBackups() {
+    tab = 'backups';
+    try { backupData = await invoke('backup_report'); }
+    catch (e) { error = String(e); }
+  }
+
   function showMap() {
     tab = 'map';
     if (!graphData && !graphLoading && scans.length) loadGraph();
@@ -119,6 +127,7 @@
         const s = scans.find((x) => x.id === e.payload.scan_id);
         if (s) openScan(s);
         loadGraph();
+        if (tab === 'backups') showBackups();
       }));
       un.push(await listen('scan-error', (e) => { progress = null; error = String(e.payload); }));
     })();
@@ -203,6 +212,7 @@
       <div class="tabs">
         <button class:on={tab === 'map'} onclick={showMap}>Map</button>
         <button class:on={tab === 'space'} onclick={() => (tab = 'space')}>Space</button>
+        <button class:on={tab === 'backups'} onclick={showBackups}>Backups</button>
       </div>
       {#if tab === 'space' && view}
         <nav>
@@ -219,7 +229,15 @@
         {/if}
       {/if}
     </header>
-    {#if tab === 'map'}
+    {#if tab === 'backups'}
+      {#if backupData}
+        <div class="body single">
+          <BackupView report={backupData} onspace={openSpace} onreveal={(p) => invoke('reveal', { path: p })} />
+        </div>
+      {:else}
+        <div class="empty"><h2>Reading your backups…</h2></div>
+      {/if}
+    {:else if tab === 'map'}
       {#if graphData}
         <div class="body">
           {#key graphData}
