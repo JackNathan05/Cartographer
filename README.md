@@ -9,9 +9,12 @@ Cartographer is a lightweight Windows desktop app (Tauri + Rust + Svelte) that m
 folders, projects and apps — and, in later versions, suggests what to archive and drifts into a
 cinematic 3D "show mode" when you step away. See [DESIGN.md](DESIGN.md) for the full plan.
 
-## Status: v0.1 (space view)
+## Status: v0.2 (map + space view)
 
 - **Fast scan:** reads the NTFS Master File Table directly (C: with 1.76M files in ~10 s) through a small elevated helper; falls back to a parallel folder walk
+- **Map:** a force-directed graph of drives, folders, projects (git repos and `Projects` folders),
+  games (Steam, Epic, Ubisoft, Xbox), installed apps and WSL distros, with search, filters and a details panel
+- **Backup coverage:** "backed up to" links from a simple config file; anything outside every backup shows red
 - Local SQLite index
 - Treemap "space view": click to zoom into folders, breadcrumbs, biggest-items list
 - System / protected space shown as its own block, so the map adds up to what Windows reports
@@ -32,12 +35,26 @@ npm run tauri build    # installer in src-tauri/target/release/bundle
 
 The index lives in `%LOCALAPPDATA%\app.cartographer.desktop\index.db`.
 
+### Backup config
+
+Tell the map where your backups go in `%LOCALAPPDATA%\app.cartographer.desktop\config.json`:
+
+```json
+{
+  "backups": [
+    { "name": "External drive (weekly)", "target": "D:\\Backup", "sources": ["C:\\Users\\me\\Documents", "E:\\Photos"] }
+  ]
+}
+```
+
+Anything inside a source counts as backed up; projects outside every backup show red on the map.
+
 ## Roadmap
 
 | Version | Delivers |
 | --- | --- |
-| v0.1 | Scanner, index, space view, tray |
-| v0.2 | 2D graph view: drives, projects, apps, games, backup links, search |
+| v0.1 | Scanner, index, space view, tray, fast MFT scan ✅ |
+| v0.2 | 2D graph view: drives, projects, apps, games, backup links, search ✅ |
 | v0.3 | Stale detection, suggestions, one-click archive / restore |
 | v0.4 | 3D view, Show mode, Privacy mode |
 | v0.5 | Health dashboard, live updates from the NTFS change journal |

@@ -2,6 +2,7 @@
 
 mod db;
 mod drives;
+mod graph;
 mod helper;
 mod mft;
 mod scan;
@@ -39,6 +40,10 @@ struct ScanProgress {
 struct ScanDone {
     root: String,
     scan_id: i64,
+}
+
+pub fn fmt_gb(b: i64) -> String {
+    format!("{:.1} GB", b as f64 / 1_073_741_824.0)
 }
 
 fn err<E: std::fmt::Display>(e: E) -> String {
@@ -164,6 +169,12 @@ fn run_scan(app: &AppHandle, db_path: &PathBuf, root: &str) -> Result<i64, Strin
 }
 
 #[tauri::command(async)]
+fn graph(state: State<AppState>) -> Result<graph::GraphData, String> {
+    let c = state.conn.lock().map_err(err)?;
+    graph::build(&c).map_err(err)
+}
+
+#[tauri::command(async)]
 fn helper_status() -> bool {
     helper::installed()
 }
@@ -249,6 +260,16 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(|s| s.as_str()) {
         Some("--bench") | Some("--bench-fast") => { bench(&args); return; }
+        Some("--graph-dump") => {
+            let db = helper::data_dir().join("index.db");
+            let out = args.get(2).cloned().unwrap_or_else(|| "graph.json".into());
+            if let Ok(c) = db::open(&db) {
+                if let Ok(g) = graph::build(&c) {
+                    let _ = std::fs::write(out, serde_json::to_vec_pretty(&g).unwrap_or_default());
+                }
+            }
+            return;
+        }
         Some("--helper") => std::process::exit(helper::run()),
         Some("--install-helper") => std::process::exit(helper::install()),
         Some("--uninstall-helper") => std::process::exit(helper::uninstall()),
@@ -293,7 +314,7 @@ fn main() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![drives, scans, view, is_scanning, start_scan, helper_status, set_fast_scan, reveal, open_path])
+        .invoke_handler(tauri::generate_handler![drives, scans, view, graph, is_scanning, start_scan, helper_status, set_fast_scan, reveal, open_path])
         .build(tauri::generate_context!())
         .expect("error while building Cartographer");
 

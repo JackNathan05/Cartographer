@@ -246,3 +246,16 @@ Rust is a good fit for the scanner and file actions (speed + safety).
 - Archive location default: `E:\Archive` vs per-drive?
 - How far "depends on" detection goes in v0.2 (start with services/WSL/venvs, expand later).
 - Integrate with the existing Weekly-Backup / Monthly-Upkeep scripts, or replace them over time?
+
+### v0.2 status (2026-11-22)
+| Item | State |
+|---|---|
+| Graph builder (Rust): drives, top folders, projects, games, apps, WSL, backup targets | Done: 136 nodes on the dev PC, built in ~1–2 s |
+| Project detection | Git repos + children of `Projects` folders in the user profile; category folders expanded; junk (node_modules, venv, build…) skipped |
+| Game detection | Steam (libraryfolders.vdf + appmanifests), Epic manifests, Ubisoft registry, `XboxGames` folders, plus game-ish uninstall entries |
+| Apps | Uninstall registry (HKLM 64/32 + HKCU) with an install location, ≥ 20 MB |
+| Backup links + coverage | Config file `config.json` (`backups: [{name, target, sources}]`); not-backed-up projects drawn red |
+| 2D graph UI (Sigma.js + ForceAtlas2) | Done: search + jump, kind filters, hover/selection focus, details panel, "Open in Space view" |
+| Single-child folder chains collapsed | Done |
+| Settings UI for backups | Not started (config file for now) |
+| "Depends on" links (services, venvs) | Not started |

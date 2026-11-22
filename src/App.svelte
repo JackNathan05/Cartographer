@@ -4,6 +4,7 @@
   import { enable, disable, isEnabled } from '@tauri-apps/plugin-autostart';
   import { onMount } from 'svelte';
   import Treemap from './Treemap.svelte';
+  import GraphView from './GraphView.svelte';
   import { fmtBytes, fmtCount, fmtAgo, fmtDate } from './format.js';
 
   let drives = $state([]);
@@ -15,6 +16,9 @@
   let fast = $state(false);
   let fastBusy = $state(false);
   let error = $state('');
+  let tab = $state('map');
+  let graphData = $state(null);
+  let graphLoading = $state(false);
 
   const scanFor = (letter) => scans.find((s) => s.root.toUpperCase().startsWith(letter + ':'));
   const kids = $derived(view?.node?.children ?? []);
@@ -71,7 +75,30 @@
     return p.phase;
   }
 
+  async function loadGraph() {
+    graphLoading = true;
+    try { graphData = await invoke('graph'); }
+    catch (e) { error = String(e); }
+    graphLoading = false;
+  }
+
+  function showMap() {
+    tab = 'map';
+    if (!graphData && !graphLoading && scans.length) loadGraph();
+  }
+
+  async function openSpace(scanId, dirId) {
+    const v = await invoke('view', { scanId, dirId });
+    if (v) { view = v; hover = null; tab = 'space'; }
+  }
+
+  function openDrive(s) {
+    tab = 'space';
+    openScan(s);
+  }
+
   function onKey(e) {
+    if (tab !== 'space' || ['INPUT', 'TEXTAREA'].includes(e.target?.tagName)) return;
     if (e.key === 'Backspace' || e.key === 'Escape') up();
   }
 
@@ -83,6 +110,7 @@
       fast = await invoke('helper_status');
       const c = scanFor('C') ?? scans[0];
       if (c) openScan(c);
+      if (scans.length) loadGraph(); else tab = 'space';
       if (await invoke('is_scanning')) progress = { root: '', files: 0, dirs: 0, bytes: 0, seconds: 0 };
       un.push(await listen('scan-progress', (e) => (progress = e.payload)));
       un.push(await listen('scan-done', async (e) => {
@@ -90,6 +118,7 @@
         await refresh();
         const s = scans.find((x) => x.id === e.payload.scan_id);
         if (s) openScan(s);
+        loadGraph();
       }));
       un.push(await listen('scan-error', (e) => { progress = null; error = String(e.payload); }));
     })();
@@ -107,7 +136,7 @@
       <img src="/icon.png" alt="" />
       <div>
         <h1>Cartographer</h1>
-        <p>v0.1 · space view</p>
+        <p>v0.2 · map + space view</p>
       </div>
     </div>
 
@@ -116,9 +145,9 @@
       {@const s = scanFor(d.letter)}
       {@const used = d.total - d.free}
       {@const pct = d.total ? used / d.total : 0}
-      {@const active = view && s && view.scan_id === s.id}
+      {@const active = tab === 'space' && view && s && view.scan_id === s.id}
       <div class="drive" class:active>
-        <button class="dmain" disabled={!s} onclick={() => s && openScan(s)}>
+        <button class="dmain" disabled={!s} onclick={() => s && openDrive(s)}>
           <div class="drow">
             <span class="letter">{d.letter}:</span>
             <span class="label">{d.label || (d.kind === 'removable' ? 'USB drive' : 'Local disk')}</span>
@@ -170,8 +199,12 @@
   </aside>
 
   <main>
-    {#if view}
-      <header>
+    <header>
+      <div class="tabs">
+        <button class:on={tab === 'map'} onclick={showMap}>Map</button>
+        <button class:on={tab === 'space'} onclick={() => (tab = 'space')}>Space</button>
+      </div>
+      {#if tab === 'space' && view}
         <nav>
           {#each view.crumbs as c, i (c.id)}
             {#if i > 0}<span class="sep">›</span>{/if}
@@ -179,7 +212,33 @@
           {/each}
         </nav>
         <div class="tot">{fmtBytes(total)} · {fmtCount(view.node.files)} files</div>
-      </header>
+      {:else}
+        <nav></nav>
+        {#if tab === 'map' && graphData}
+          <button class="rebuild" disabled={graphLoading} onclick={loadGraph}>{graphLoading ? 'Updating…' : '↻ Refresh map'}</button>
+        {/if}
+      {/if}
+    </header>
+    {#if tab === 'map'}
+      {#if graphData}
+        <div class="body">
+          {#key graphData}
+            <GraphView data={graphData} onspace={openSpace} onreveal={(p) => invoke('reveal', { path: p })} />
+          {/key}
+        </div>
+      {:else}
+        <div class="empty">
+          <img src="/icon.png" alt="" />
+          {#if graphLoading}
+            <h2>Drawing your map…</h2>
+            <p>Reading drives, projects, games and apps.</p>
+          {:else}
+            <h2>Map your PC</h2>
+            <p>Scan a drive on the left first. The map fills in as you scan more drives.</p>
+          {/if}
+        </div>
+      {/if}
+    {:else if view}
       <div class="body">
         <section class="map">
           {#key view.node.id}
@@ -216,7 +275,7 @@
           <span>{fmtBytes(info.size)}</span>
           {#if info.kind === 'dir'}<span>{fmtCount(info.files)} files</span>{/if}
           {#if info.newest}<span>last changed {fmtDate(info.newest)} ({fmtAgo(info.newest)})</span>{/if}
-          {#if info.kind === 'hidden'}<span>Windows, page file, restore points and folders this scan can't read (admin scan comes later)</span>{/if}
+          {#if info.kind === 'hidden'}<span>Windows, page file, restore points and space this scan can't account for</span>{/if}
           {#if info.kind === 'other'}<span>small files and folders grouped together</span>{/if}
           {#if info.denied && info.kind === 'dir'}<span class="warn">access denied</span>{/if}
           {#if info.path}<span class="path">{info.path}</span>{/if}
@@ -226,7 +285,7 @@
       <div class="empty">
         <img src="/icon.png" alt="" />
         <h2>Map your PC</h2>
-        <p>Pick a drive on the left and press <b>Scan</b>. C: usually takes under a minute.</p>
+        <p>Pick a drive on the left and press <b>Scan</b>.</p>
       </div>
     {/if}
   </main>

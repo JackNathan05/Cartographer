@@ -10,6 +10,7 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     c.execute_batch(
         "PRAGMA journal_mode=WAL;
          PRAGMA synchronous=NORMAL;
+         PRAGMA journal_size_limit=16777216;
          CREATE TABLE IF NOT EXISTS scans(
            id INTEGER PRIMARY KEY, root TEXT NOT NULL, started INTEGER, duration_ms INTEGER,
            dirs INTEGER, files INTEGER, bytes INTEGER, denied INTEGER, root_dir INTEGER);
