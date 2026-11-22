@@ -131,6 +131,7 @@
     onTick();
     renderer = makeRenderer();
     fitBBox();
+    if (layout.camera) renderer.getCamera().setState(layout.camera);
     renderer.refresh();
   }
 
@@ -304,6 +305,8 @@
     saving = true;
     try {
       const snap = JSON.parse(JSON.stringify(engine.snapshot()));
+      if (renderer) snap.camera = renderer.getCamera().getState(); // zoom + position, restored on open
+      layout.camera = snap.camera;
       await invoke('save_layout', { layout: snap });
       dirty = false;
       savedNote = 'Saved. The map will always open like this.';
@@ -311,6 +314,16 @@
       savedNote = 'Save failed: ' + e;
     }
     saving = false;
+  }
+
+  // pressing "Done editing" saves the layout and the current view automatically
+  async function toggleEditing() {
+    placing = null;
+    if (editing) {
+      await save();
+      savedNote = '';
+    }
+    editing = !editing;
   }
 
   async function revert() {
@@ -459,8 +472,8 @@
     <button class="switch" class:on={showNames} role="switch" aria-checked={showNames} title="Show every name on the map" onclick={toggleNames}>
       <span class="track"><span class="knob"></span></span>Names
     </button>
-    <button class="edit" class:on={editing} onclick={() => { editing = !editing; placing = null; }}>
-      {editing ? 'Done editing' : '✎ Edit layout'}{dirty ? ' •' : ''}
+    <button class="edit" class:on={editing} onclick={toggleEditing}>
+      {editing ? (saving ? 'Saving…' : 'Done editing') : '✎ Edit layout'}{dirty ? ' •' : ''}
     </button>
   </div>
 
@@ -483,7 +496,7 @@
 <section class="panel">
   {#if editing}
     <div class="kind" style="color:#fbbf24">Layout editor</div>
-    <p class="muted small">Drag any dot to pin it. Drag the colored points to move them. Changes apply live; <b>Save</b> keeps them for good.</p>
+    <p class="muted small">Drag any dot to pin it. Drag the colored points to move them. Changes apply live; <b>Done editing</b> saves them (and your current zoom) automatically.</p>
     <div class="row">
       <button class="primary" disabled={!dirty || saving} onclick={save}>{saving ? 'Saving…' : 'Save layout'}</button>
       <button disabled={saving} onclick={revert}>Revert</button>
