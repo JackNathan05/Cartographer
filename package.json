@@ -1,0 +1,22 @@
+{
+  "name": "cartographer",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.3.0",
+    "@tauri-apps/plugin-autostart": "^2.2.0",
+    "d3-hierarchy": "^3.1.2"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.0.3",
+    "@tauri-apps/cli": "^2.3.0",
+    "svelte": "^5.20.0",
+    "vite": "^6.2.0"
+  }
+}
