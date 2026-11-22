@@ -145,7 +145,7 @@
       <img src="/icon.png" alt="" />
       <div>
         <h1>Cartographer</h1>
-        <p>v0.2 · map + space view</p>
+        <p>v0.2 · map, space &amp; backups</p>
       </div>
     </div>
 

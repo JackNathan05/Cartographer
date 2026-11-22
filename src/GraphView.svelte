@@ -139,6 +139,42 @@
     savedNote = '';
   }
 
+  // ---- labels: every label gets a dark backing so it reads over lines and dots, and labels
+  // never sit on top of each other: each one tries right / left / above / below its dot and is
+  // skipped if all four are taken (bigger dots are drawn first, so they win). Labels that must
+  // show (drives, hovered, selected, search hits) are drawn even when crowded.
+  const occupied = [];
+  const hits = (a) => occupied.some((b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y);
+  function drawLabel(ctx, d, s) {
+    if (!d.label) return;
+    const size = s.labelSize;
+    ctx.font = `${s.labelWeight} ${size}px ${s.labelFont}`;
+    const w = ctx.measureText(d.label).width + 10;
+    const h = size + 7;
+    const gap = d.size + 4;
+    const spots = [
+      { x: d.x + gap, y: d.y - h / 2 },
+      { x: d.x - gap - w, y: d.y - h / 2 },
+      { x: d.x - w / 2, y: d.y - gap - h },
+      { x: d.x - w / 2, y: d.y + gap },
+    ];
+    const dpr = window.devicePixelRatio || 1;
+    const cw = ctx.canvas.width / dpr, ch = ctx.canvas.height / dpr;
+    const inside = (p) => p.x >= 2 && p.y >= 2 && p.x + w <= cw - 2 && p.y + h <= ch - 2;
+    let spot = spots.find((p) => inside(p) && !hits({ ...p, w, h }));
+    if (!spot) {
+      if (!d.forceLabel) return;
+      spot = spots[0];
+    }
+    occupied.push({ ...spot, w, h });
+    ctx.fillStyle = 'rgba(9,13,21,0.82)';
+    ctx.beginPath();
+    ctx.roundRect(spot.x, spot.y, w, h, 5);
+    ctx.fill();
+    ctx.fillStyle = s.labelColor.color;
+    ctx.fillText(d.label, spot.x + 5, spot.y + h / 2 + size / 3);
+  }
+
   // ---- interaction helpers
   function drawHover(ctx, d, s) {
     const size = s.labelSize;
@@ -296,9 +332,10 @@
       labelFont: "'Segoe UI Variable Text', 'Segoe UI', sans-serif",
       labelSize: 12,
       labelWeight: '500',
-      labelDensity: 0.45,
-      labelGridCellSize: 120,
-      labelRenderedSizeThreshold: 7,
+      labelDensity: 1,
+      labelGridCellSize: 60,
+      labelRenderedSizeThreshold: 6,
+      defaultDrawNodeLabel: drawLabel,
       defaultDrawNodeHover: drawHover,
       zIndex: true,
       stagePadding: 40,
@@ -338,6 +375,7 @@
       },
     });
 
+    r.on('beforeRender', () => (occupied.length = 0));
     let drag = null;
     let moved = false;
     r.on('enterNode', ({ node }) => { if (!node.startsWith('pt:')) hovered = node; });

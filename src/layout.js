@@ -19,7 +19,7 @@ export const DEFAULTS = {
   driveRepel: 1.2, // extra push between dots of different drives
   driveRange: 260, // how far that push reaches
   ring: 62, // spacing between rings when radiating outward
-  core: 40, // how far from a radiate point the drives sit
+  core: 90, // how far from a radiate point the drives sit
   radiate: 0.12, // how strongly rings are kept
   gravity: 0.015, // gentle pull to the middle so nothing drifts away
 };
@@ -170,7 +170,7 @@ export function createLayout(data, layout, onTick) {
   const sim = forceSimulation(nodes)
     .force('link', link)
     .force('charge', charge)
-    .force('collide', forceCollide((d) => 4 + Math.min(18, Math.sqrt(Math.max(d.size, 0) / 1073741824) * 2.2)))
+    .force('collide', forceCollide((d) => (d.kind === 'drive' ? 40 : 4 + Math.min(18, Math.sqrt(Math.max(d.size, 0) / 1073741824) * 2.2))).strength(0.9))
     .force('driveRepel', driveRepel)
     .force('radiate', radiate)
     .force('points', points)
