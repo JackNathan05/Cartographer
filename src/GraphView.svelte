@@ -1,7 +1,6 @@
 <script>
   import Graph from 'graphology';
   import Sigma from 'sigma';
-  import forceAtlas2 from 'graphology-layout-forceatlas2';
   import { onMount } from 'svelte';
   import { fmtBytes, fmtAgo, fmtDate } from './format.js';
 
@@ -77,57 +76,86 @@
       });
     }
 
-    // seed positions: drives far apart on a ring, everything else near its parent (stable between runs)
-    const drives = data.nodes.filter((n) => n.kind === 'drive');
-    drives.forEach((d, i) => {
-      const a = (i / drives.length) * Math.PI * 2;
-      g.mergeNodeAttributes(d.id, { x: Math.cos(a) * 400, y: Math.sin(a) * 400 });
+    // Radial layout: each drive is the center of its own circle, and its folders,
+    // projects, apps and games fan outward in rings (one ring per folder level).
+    // Each branch gets a slice of the circle sized by how many things are in it.
+    // Drives sit in a compact grid in the middle. Deterministic: same map every time.
+    const kidsOf = new Map();
+    g.forEachEdge((e, a, s, t) => {
+      if (a.kind !== 'lives_on') return;
+      if (!kidsOf.has(t)) kidsOf.set(t, []);
+      kidsOf.get(t).push(s);
     });
-    const parentOf = new Map();
-    g.forEachEdge((e, a, s, t) => { if (a.kind === 'lives_on') parentOf.set(s, t); });
-    const driveOf = (id) => {
-      let cur = id;
-      for (let i = 0; i < 64 && parentOf.has(cur); i++) cur = parentOf.get(cur);
-      return cur.startsWith('drive:') ? cur : null;
+    for (const list of kidsOf.values()) list.sort((x, y) => (byId.get(y)?.size ?? 0) - (byId.get(x)?.size ?? 0) || x.localeCompare(y));
+    const weight = new Map();
+    const depthOf = new Map();
+    const measure = (id, d) => {
+      depthOf.set(id, d);
+      const kids = kidsOf.get(id) ?? [];
+      let leaves = kids.length ? 0 : 1;
+      for (const k of kids) leaves += measure(k, d + 1);
+      // slices grow with the square root of what's inside, so one huge branch (Users)
+      // can't take half the circle and small branches still get room to fan out
+      weight.set(id, Math.sqrt(leaves) + 0.5);
+      return leaves;
     };
-    const placed = new Set(drives.map((d) => d.id));
-    let frontier = drives.map((d) => d.id);
-    while (frontier.length) {
-      const next = [];
-      for (const p of frontier) {
-        const px = g.getNodeAttribute(p, 'x');
-        const py = g.getNodeAttribute(p, 'y');
-        g.forEachInEdge(p, (e, a, child) => {
-          if (a.kind !== 'lives_on' || placed.has(child)) return;
-          const ang = hash(child) * Math.PI * 2;
-          const r = 12 + hash(child + '#') * 18;
-          g.mergeNodeAttributes(child, { x: px + Math.cos(ang) * r, y: py + Math.sin(ang) * r });
-          placed.add(child);
-          next.push(child);
-        });
+    const RING = 52;
+    const ringR = (d) => RING * Math.pow(d, 0.9) + (d > 0 ? 18 : 0);
+    const local = new Map(); // id -> {x, y} relative to its drive
+    const place = (id, a0, a1, d, nth = 0) => {
+      const mid = (a0 + a1) / 2;
+      // end-of-branch dots alternate between two radii so a crowded arc becomes a zig-zag
+      const leaf = !(kidsOf.get(id) ?? []).length;
+      const r = ringR(d) + (leaf && d > 1 ? (nth % 2) * 16 : 0);
+      local.set(id, { x: Math.cos(mid) * r, y: Math.sin(mid) * r });
+      const kids = kidsOf.get(id) ?? [];
+      const total = kids.reduce((s2, k) => s2 + weight.get(k), 0) || 1;
+      const span = a1 - a0;
+      let cur = a0;
+      for (const [i, k] of kids.entries()) {
+        const w = (weight.get(k) / total) * span;
+        place(k, cur, cur + w, d + 1, i);
+        cur += w;
       }
-      frontier = next;
+    };
+    const maxDepth = (id) => 1 + Math.max(0, ...(kidsOf.get(id) ?? []).map(maxDepth));
+    const allDrives = data.nodes.filter((n) => n.kind === 'drive');
+    for (const dv of allDrives) measure(dv.id, 0);
+    const drives = allDrives.sort((x, y) => maxDepth(y.id) * 1000 + weight.get(y.id) - (maxDepth(x.id) * 1000 + weight.get(x.id)));
+    const radius = new Map();
+    for (const dv of drives) {
+      place(dv.id, 0, Math.PI * 2, 0);
+      radius.set(dv.id, ringR(Math.max(1, maxDepth(dv.id) - 1)));
     }
+    // drives packed around the middle (2x2 for four drives), biggest first; each sits just
+    // far enough out that its circle clears its neighbours'
+    const GAP = 50;
+    const n = drives.length;
+    const driveOf = new Map();
+    const tag = (id, dv) => { driveOf.set(id, dv); for (const k of kidsOf.get(id) ?? []) tag(k, dv); };
+    g.__center = {};
+    drives.forEach((dv, i) => {
+      const ang = -Math.PI * 3 / 4 + (i * 2 * Math.PI) / n;
+      const dist = n === 1 ? 0 : (radius.get(dv.id) + GAP) / Math.sin(Math.PI / n);
+      const cx = Math.cos(ang) * dist;
+      const cy = Math.sin(ang) * dist;
+      tag(dv.id, dv.id);
+      g.__center[dv.id] = [cx, cy];
+    });
     g.forEachNode((id) => {
-      if (!placed.has(id)) g.mergeNodeAttributes(id, { x: (hash(id) - 0.5) * 200, y: (hash(id + '!') - 0.5) * 200 });
+      const dv = driveOf.get(id);
+      const p = local.get(id);
+      if (dv && p && id !== dv) {
+        const [cx, cy] = g.__center[dv];
+        g.mergeNodeAttributes(id, { x: cx + p.x, y: -(cy + p.y) });
+      } else if (!dv) {
+        g.mergeNodeAttributes(id, { x: (hash(id) - 0.5) * 50, y: (hash(id + '!') - 0.5) * 50 });
+      }
     });
-
-    // The layout runs on its own copy of the graph: only "lives in" edges (backup links cross
-    // drives and would drag them together), plus a weak invisible tether from every node to
-    // its drive. Each drive ends up as its own clump; nothing extra is drawn.
-    const L = new Graph({ type: 'undirected' });
-    g.forEachNode((id, a) => L.addNode(id, { x: a.x, y: a.y, size: a.size }));
-    g.forEachEdge((e, a, s, t) => { if (a.kind === 'lives_on') L.mergeEdge(s, t, { weight: 3 }); });
-    g.forEachNode((id) => {
-      const d = driveOf(id);
-      if (d && d !== id && !L.hasEdge(id, d)) L.addEdge(id, d, { weight: 0.9 });
-    });
-    const settings = forceAtlas2.inferSettings(L);
-    forceAtlas2.assign(L, {
-      iterations: 600,
-      settings: { ...settings, gravity: 0.12, scalingRatio: 10, slowDown: 3, outboundAttractionDistribution: true, barnesHutOptimize: L.order > 400, edgeWeightInfluence: 1 },
-    });
-    L.forEachNode((id, a) => g.mergeNodeAttributes(id, { x: a.x, y: a.y }));
+    for (const dv of drives) {
+      const [cx, cy] = g.__center[dv.id];
+      g.mergeNodeAttributes(dv.id, { x: cx, y: -cy });
+    }
     return g;
   }
 
