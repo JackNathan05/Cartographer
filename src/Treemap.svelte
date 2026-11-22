@@ -51,6 +51,13 @@
     return text.length > max ? text.slice(0, max - 1) + '…' : text;
   }
 
+  // Unique per cell: "smaller files" / "System" blocks have no id or path, and the same
+  // label can appear under several folders, so key them by their parent folder.
+  function keyOf(d) {
+    const own = d.data.id ?? d.data.path ?? d.data.name;
+    return `${d.parent?.data.id ?? 'root'}/${d.data.kind}/${own}`;
+  }
+
   function click(d) {
     if (d.data.kind === 'dir' && d.data.id != null) onopen?.(d.data.id);
   }
@@ -64,7 +71,7 @@
         <line x1="0" y1="0" x2="0" y2="8" stroke="hsl(220 10% 26%)" stroke-width="3" />
       </pattern>
     </defs>
-    {#each layout.cells as d (d.data.kind + (d.data.id ?? d.data.path ?? d.data.name) + d.depth)}
+    {#each layout.cells as d (keyOf(d))}
       {@const cw = d.x1 - d.x0}
       {@const ch = d.y1 - d.y0}
       <g

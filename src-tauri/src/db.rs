@@ -203,7 +203,7 @@ fn load(conn: &Connection, row: DirRow, depth: u32, limit: usize) -> rusqlite::R
     if rest > 0 {
         kids.push(Item {
             id: None, kind: "other",
-            name: if row.small_count > 0 { format!("{} smaller files", row.small_count) } else { "Smaller items".into() },
+            name: match row.small_count { 0 => "Smaller items".into(), 1 => "1 smaller file".into(), n => format!("{n} smaller files") },
             path: None, size: rest, files: 0, newest: 0, denied: false, children: None,
         });
     }
