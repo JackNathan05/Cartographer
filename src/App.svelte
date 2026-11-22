@@ -12,6 +12,8 @@
   let progress = $state(null);
   let hover = $state(null);
   let autostart = $state(false);
+  let fast = $state(false);
+  let fastBusy = $state(false);
   let error = $state('');
 
   const scanFor = (letter) => scans.find((s) => s.root.toUpperCase().startsWith(letter + ':'));
@@ -56,6 +58,19 @@
     } catch (e) { error = String(e); }
   }
 
+  async function toggleFast() {
+    fastBusy = true;
+    error = '';
+    try { fast = await invoke('set_fast_scan', { on: !fast }); }
+    catch (e) { error = String(e); }
+    fastBusy = false;
+  }
+
+  function phaseLabel(p) {
+    if (p.phase === 'reading index' && p.total_records && p.records >= p.total_records) return 'building map';
+    return p.phase;
+  }
+
   function onKey(e) {
     if (e.key === 'Backspace' || e.key === 'Escape') up();
   }
@@ -65,6 +80,7 @@
     (async () => {
       await refresh();
       try { autostart = await isEnabled(); } catch {}
+      fast = await invoke('helper_status');
       const c = scanFor('C') ?? scans[0];
       if (c) openScan(c);
       if (await invoke('is_scanning')) progress = { root: '', files: 0, dirs: 0, bytes: 0, seconds: 0 };
@@ -111,7 +127,7 @@
           <div class="bar"><div style="width:{pct * 100}%" class:warn={pct > 0.9}></div></div>
           <div class="meta">
             {#if s}
-              {fmtBytes(used)} of {fmtBytes(d.total)} · scanned {fmtAgo(s.started)} in {(s.duration_ms / 1000).toFixed(1)} s
+              {fmtBytes(used)} of {fmtBytes(d.total)} · scanned {fmtAgo(s.started)} in {(s.duration_ms / 1000).toFixed(1)} s{s.method === 'fast' ? ' ⚡' : ''}
             {:else}
               {fmtBytes(used)} of {fmtBytes(d.total)} · not scanned yet
             {/if}
@@ -127,14 +143,25 @@
       <div class="progress">
         <div class="spinner"></div>
         <div>
-          <b>Scanning {progress.root}</b>
-          <span>{fmtCount(progress.files)} files · {fmtBytes(progress.bytes)} · {progress.seconds?.toFixed(1)} s</span>
+          <b>Scanning {progress.root}{phaseLabel(progress) ? ` · ${phaseLabel(progress)}` : ''}</b>
+          {#if progress.total_records && phaseLabel(progress) === 'reading index'}
+            <span>{Math.round((progress.records / progress.total_records) * 100)}% of {fmtCount(progress.total_records)} records · {progress.seconds?.toFixed(1)} s</span>
+          {:else}
+            <span>{fmtCount(progress.files)} files · {fmtBytes(progress.bytes)} · {progress.seconds?.toFixed(1)} s</span>
+          {/if}
         </div>
       </div>
     {/if}
     {#if error}<div class="error">{error}</div>{/if}
 
     <div class="spacer"></div>
+    <div class="fast" class:on={fast}>
+      <div>
+        <b>⚡ Fast scan {fast ? 'on' : 'off'}</b>
+        <span>{fast ? 'Reads the drive index directly. NTFS drives scan in seconds.' : 'Reads the drive index directly. Needs admin once (one Windows prompt).'}</span>
+      </div>
+      <button disabled={fastBusy || !!progress} onclick={toggleFast}>{fastBusy ? '…' : fast ? 'Turn off' : 'Turn on'}</button>
+    </div>
     <label class="toggle">
       <input type="checkbox" checked={autostart} onchange={toggleAutostart} />
       <span>Start with Windows (in tray)</span>

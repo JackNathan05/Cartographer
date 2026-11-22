@@ -11,7 +11,8 @@ cinematic 3D "show mode" when you step away. See [DESIGN.md](DESIGN.md) for the 
 
 ## Status: v0.1 (space view)
 
-- Fast parallel scan of any drive into a local SQLite index
+- **Fast scan:** reads the NTFS Master File Table directly (C: with 1.76M files in ~10 s) through a small elevated helper; falls back to a parallel folder walk
+- Local SQLite index
 - Treemap "space view": click to zoom into folders, breadcrumbs, biggest-items list
 - System / protected space shown as its own block, so the map adds up to what Windows reports
 - Lives in the system tray; closing the window frees the UI, the tray keeps running

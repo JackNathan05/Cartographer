@@ -90,3 +90,10 @@ footer .warn { color: var(--warn); }
 .empty { margin: auto; text-align: center; color: var(--muted); }
 .empty img { width: 96px; height: 96px; border-radius: 22px; opacity: 0.9; }
 .empty h2 { color: var(--text); margin: 14px 0 6px; }
+
+.fast { display: flex; gap: 10px; align-items: center; padding: 10px 11px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); font-size: 11.5px; }
+.fast.on { border-color: #1d4a47; background: #0f1f26; }
+.fast b { display: block; font-size: 12.5px; margin-bottom: 2px; }
+.fast span { color: var(--muted); line-height: 1.35; }
+.fast button { flex: none; padding: 6px 10px; border-radius: 7px; border: 1px solid var(--line); color: var(--accent); font-size: 12px; }
+.fast button:not(:disabled):hover { border-color: var(--accent); background: #12302f; }

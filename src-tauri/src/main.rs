@@ -2,6 +2,8 @@
 
 mod db;
 mod drives;
+mod helper;
+mod mft;
 mod scan;
 
 use rusqlite::Connection;
@@ -24,9 +26,12 @@ struct AppState {
 #[derive(Serialize, Clone)]
 struct ScanProgress {
     root: String,
+    phase: String,
     files: u64,
     dirs: u64,
     bytes: u64,
+    records: u64,
+    total_records: u64,
     seconds: f64,
 }
 
@@ -76,7 +81,10 @@ fn start_scan(app: AppHandle, state: State<AppState>, root: String) -> Result<()
         .name("scan".into())
         .stack_size(64 * 1024 * 1024)
         .spawn(move || {
-            let result = run_scan(&app, &db_path, &root);
+            let result = match fast_scan(&app, &root) {
+                Some(r) => r,
+                None => run_scan(&app, &db_path, &root),
+            };
             flag.store(false, Ordering::SeqCst);
             match result {
                 Ok(scan_id) => { let _ = app.emit("scan-done", ScanDone { root, scan_id }); }
@@ -85,6 +93,39 @@ fn start_scan(app: AppHandle, state: State<AppState>, root: String) -> Result<()
         })
         .map_err(err)?;
     Ok(())
+}
+
+/// Use the elevated helper when it's installed and the drive is NTFS.
+/// Returns None to fall back to the normal folder walk.
+fn fast_scan(app: &AppHandle, root: &str) -> Option<Result<i64, String>> {
+    let letter = root.chars().next()?.to_ascii_uppercase().to_string();
+    let ntfs = drives::list().into_iter().any(|d| d.letter == letter && d.fs == "NTFS");
+    if !ntfs || !helper::installed() || !helper::request(root) {
+        return None;
+    }
+    let t0 = Instant::now();
+    loop {
+        std::thread::sleep(Duration::from_millis(150));
+        let s = helper::read_status();
+        match s {
+            Some(s) if s.state == "done" => return Some(s.scan_id.ok_or_else(|| "helper gave no result".to_string())),
+            Some(s) if s.state == "error" => {
+                let e = s.error.unwrap_or_default();
+                return if e.contains("not NTFS") { None } else { Some(Err(e)) };
+            }
+            Some(s) => {
+                let _ = app.emit("scan-progress", ScanProgress {
+                    root: root.to_string(), phase: s.phase, files: s.files, dirs: 0, bytes: s.bytes,
+                    records: s.records, total_records: s.total_records, seconds: s.seconds,
+                });
+            }
+            None if t0.elapsed() > Duration::from_secs(20) => return None, // helper never started
+            None => {}
+        }
+        if t0.elapsed() > Duration::from_secs(900) {
+            return Some(Err("Fast scan timed out".into()));
+        }
+    }
 }
 
 fn run_scan(app: &AppHandle, db_path: &PathBuf, root: &str) -> Result<i64, String> {
@@ -100,6 +141,9 @@ fn run_scan(app: &AppHandle, db_path: &PathBuf, root: &str) -> Result<i64, Strin
             while !done.load(Ordering::Relaxed) {
                 let _ = app.emit("scan-progress", ScanProgress {
                     root: root.clone(),
+                    phase: "walking folders".into(),
+                    records: 0,
+                    total_records: 0,
                     files: prog.files.load(Ordering::Relaxed),
                     dirs: prog.dirs.load(Ordering::Relaxed),
                     bytes: prog.bytes.load(Ordering::Relaxed),
@@ -114,9 +158,21 @@ fn run_scan(app: &AppHandle, db_path: &PathBuf, root: &str) -> Result<i64, Strin
     let tree = scan::scan(std::path::Path::new(root), name, &prog);
     let scan_ms = t0.elapsed().as_millis() as i64;
     let mut conn = db::open(db_path).map_err(err)?;
-    let id = db::save_scan(&mut conn, root, started, scan_ms, prog.denied.load(Ordering::Relaxed), &tree).map_err(err);
+    let id = db::save_scan(&mut conn, root, started, scan_ms, prog.denied.load(Ordering::Relaxed), "walk", &tree).map_err(err);
     done.store(true, Ordering::Relaxed);
     id
+}
+
+#[tauri::command(async)]
+fn helper_status() -> bool {
+    helper::installed()
+}
+
+/// Shows one UAC prompt. Returns whether fast scan is now on.
+#[tauri::command(async)]
+fn set_fast_scan(on: bool) -> Result<bool, String> {
+    helper::run_elevated(if on { "--install-helper" } else { "--uninstall-helper" })?;
+    Ok(helper::installed())
 }
 
 #[tauri::command(async)]
@@ -155,13 +211,24 @@ fn bench(args: &[String]) {
     let root = args.get(2).cloned().unwrap_or_else(|| "C:\\".into());
     let db_path = PathBuf::from(args.get(3).cloned().unwrap_or_else(|| "bench.db".into()));
     let report = args.get(4).cloned().unwrap_or_else(|| "bench.txt".into());
+    let fast = args.get(1).map(|s| s == "--bench-fast").unwrap_or(false);
     let prog = scan::Progress::default();
     let t0 = Instant::now();
-    let tree = scan::scan(std::path::Path::new(&root), root.trim_end_matches('\\').into(), &prog);
+    let tree = if fast {
+        match mft::scan(&root, &prog) {
+            Ok(t) => t,
+            Err(e) => {
+                let _ = std::fs::write(&report, format!("fast scan failed: {e}\n"));
+                return;
+            }
+        }
+    } else {
+        scan::scan(std::path::Path::new(&root), root.trim_end_matches('\\').into(), &prog)
+    };
     let scan_s = t0.elapsed().as_secs_f64();
     let t1 = Instant::now();
     let mut conn = db::open(&db_path).expect("db");
-    let id = db::save_scan(&mut conn, &root, 0, (scan_s * 1000.0) as i64, prog.denied.load(Ordering::Relaxed), &tree).expect("save");
+    let id = db::save_scan(&mut conn, &root, 0, (scan_s * 1000.0) as i64, prog.denied.load(Ordering::Relaxed), if fast { "fast" } else { "walk" }, &tree).expect("save");
     let save_s = t1.elapsed().as_secs_f64();
     let t2 = Instant::now();
     let v = db::view(&conn, id, None, drives::used(&root)).expect("view").expect("root");
@@ -180,9 +247,12 @@ fn bench(args: &[String]) {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if args.get(1).map(|s| s == "--bench").unwrap_or(false) {
-        bench(&args);
-        return;
+    match args.get(1).map(|s| s.as_str()) {
+        Some("--bench") | Some("--bench-fast") => { bench(&args); return; }
+        Some("--helper") => std::process::exit(helper::run()),
+        Some("--install-helper") => std::process::exit(helper::install()),
+        Some("--uninstall-helper") => std::process::exit(helper::uninstall()),
+        _ => {}
     }
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
@@ -223,7 +293,7 @@ fn main() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![drives, scans, view, is_scanning, start_scan, reveal, open_path])
+        .invoke_handler(tauri::generate_handler![drives, scans, view, is_scanning, start_scan, helper_status, set_fast_scan, reveal, open_path])
         .build(tauri::generate_context!())
         .expect("error while building Cartographer");
 

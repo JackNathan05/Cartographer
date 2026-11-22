@@ -225,11 +225,12 @@ Rust is a good fit for the scanner and file actions (speed + safety).
 | "System & protected files" block so totals match Windows | Done |
 | Tray icon, close-to-tray (UI destroyed, core keeps running), single instance | Done |
 | Start with Windows (hidden in tray), opt-in toggle | Done |
-| Full scan speed | **Not at target:** E: 0.7 s, C: 46 s (1.75M files). Needs the admin MFT reader (target < 15 s) |
+| Full scan speed | **Done (fast scan):** MFT reader via elevated helper. C: 9.6 s scan / 16 s incl. save (was 46 s), E: 1.4 s. 0 unreadable folders (was 218). Folder walk stays as fallback |
 | Full file index | **Partial:** files ≥ 1 MB stored individually, smaller files summed per folder (C: index = 76 MB) |
-| Admin helper (scheduled task), USN change journal | Not started → v0.5 |
+| Admin helper | **Done:** one UAC prompt copies the exe to Program Files (admin-only) + task `\Cartographer\Fast Scan` (highest privileges); app triggers it with `schtasks /Run`, talks via request/status JSON |
+| USN change journal (live updates) | Not started → v0.5 |
 | Global hotkey, 60 s delayed start | Not started |
-| Hard-link double counting (WinSxS) | Known: C:\Windows over-counts slightly until the MFT reader |
+| Hard-link double counting (WinSxS) | **Fixed by fast scan** (C:\Windows 36.0 → 31.6 GB); walk scan still over-counts |
 
 ---
 

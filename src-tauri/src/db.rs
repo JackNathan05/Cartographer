@@ -24,6 +24,8 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
          CREATE INDEX IF NOT EXISTS files_dir ON files(dir_id);
          CREATE INDEX IF NOT EXISTS files_scan ON files(scan_id);",
     )?;
+    // v0.1 databases: add the scan method column ("walk" or "fast")
+    let _ = c.execute("ALTER TABLE scans ADD COLUMN method TEXT", []);
     Ok(c)
 }
 
@@ -42,7 +44,7 @@ fn insert_tree(d: &mut Statement, f: &mut Statement, scan: i64, parent: Option<i
 }
 
 /// Replaces any previous scan of the same root.
-pub fn save_scan(conn: &mut Connection, root: &str, started: i64, duration_ms: i64, denied: u64, tree: &Dir) -> rusqlite::Result<i64> {
+pub fn save_scan(conn: &mut Connection, root: &str, started: i64, duration_ms: i64, denied: u64, method: &str, tree: &Dir) -> rusqlite::Result<i64> {
     let tx = conn.transaction()?;
     let old: Vec<i64> = {
         let mut s = tx.prepare("SELECT id FROM scans WHERE root = ?1")?;
@@ -55,8 +57,8 @@ pub fn save_scan(conn: &mut Connection, root: &str, started: i64, duration_ms: i
         tx.execute("DELETE FROM scans WHERE id = ?1", [id])?;
     }
     tx.execute(
-        "INSERT INTO scans(root, started, duration_ms, dirs, files, bytes, denied) VALUES (?1,?2,?3,?4,?5,?6,?7)",
-        params![root, started, duration_ms, tree.dirs as i64, tree.files as i64, tree.size as i64, denied as i64],
+        "INSERT INTO scans(root, started, duration_ms, dirs, files, bytes, denied, method) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+        params![root, started, duration_ms, tree.dirs as i64, tree.files as i64, tree.size as i64, denied as i64, method],
     )?;
     let scan_id = tx.last_insert_rowid();
     let root_dir = {
@@ -83,16 +85,17 @@ pub struct ScanInfo {
     pub bytes: i64,
     pub denied: i64,
     pub root_dir: i64,
+    pub method: String,
 }
 
 pub fn scans(conn: &Connection) -> rusqlite::Result<Vec<ScanInfo>> {
     let mut s = conn.prepare(
-        "SELECT id, root, started, duration_ms, dirs, files, bytes, denied, root_dir FROM scans ORDER BY root",
+        "SELECT id, root, started, duration_ms, dirs, files, bytes, denied, root_dir, COALESCE(method, 'walk') FROM scans ORDER BY root",
     )?;
     let rows = s.query_map([], |r| {
         Ok(ScanInfo {
             id: r.get(0)?, root: r.get(1)?, started: r.get(2)?, duration_ms: r.get(3)?,
-            dirs: r.get(4)?, files: r.get(5)?, bytes: r.get(6)?, denied: r.get(7)?, root_dir: r.get(8)?,
+            dirs: r.get(4)?, files: r.get(5)?, bytes: r.get(6)?, denied: r.get(7)?, root_dir: r.get(8)?, method: r.get(9)?,
         })
     })?;
     rows.collect()

@@ -19,6 +19,9 @@ pub struct Progress {
     pub dirs: AtomicU64,
     pub bytes: AtomicU64,
     pub denied: AtomicU64,
+    /// fast (MFT) scan only: records read so far / total records
+    pub records: AtomicU64,
+    pub total_records: AtomicU64,
 }
 
 pub struct FileEnt {
