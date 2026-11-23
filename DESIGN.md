@@ -268,3 +268,16 @@ Rust is a good fit for the scanner and file actions (speed + safety).
 | Backups view | Done: destination cards (connected, last activity, stored, free space), source → destination flow diagram, per-drive coverage bars (2+ / 1 / yours unprotected / reinstallable), not-backed-up vs backed-up folder lists |
 | Backup editor UI (instead of hand-editing config.json) | Not started |
 | Real "last run" from backup logs / tool integrations | Heuristic only (newest timestamp in target + nearby logs) |
+
+### v0.3 status (2026-11-23)
+| Item | State |
+|---|---|
+| Stale detection | Projects (newest file / git activity, 180 d), games (Steam LastPlayed + UserAssist, 180 d, >= 1 GB), apps (UserAssist, 365 d, >= 200 MB; unknown history never suggested), Downloads (60 d, >= 10 MB) |
+| Suggestions | Reason, last used + source, size, backup coverage; Snooze 30 days / Never suggest (cleanup.json) |
+| Archive | Zip (deflate, zip64) to archive dir (config `archive_dir`, else `<data drive>:\Archive`, else profile\Archive) -> verify count, sizes, CRC -> originals to Recycle Bin -> log. Junctions skipped. Any failure before the Recycle Bin step deletes only the partial zip |
+| Delete / Uninstall | Recycle Bin (restorable) / opens Windows Installed apps |
+| Restore | Unzip in place + verify count, zip to Recycle Bin; deletes restored from the Recycle Bin |
+| Safety | Refuses drive roots, Windows / Program Files / ProgramData / AppData / dot-folders, whole user folders, anything on C: outside the profile |
+| Ghost nodes | Archived items appear on the map (faded) with a Restore button |
+| Self-test | `--cleanup-selftest` archives + restores and deletes + restores a throwaway folder: 12/12 pass |
+| Dot size controls | Dot size (%) and Shrink per level (%) in the layout editor |

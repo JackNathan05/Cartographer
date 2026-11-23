@@ -9,7 +9,7 @@ Cartographer is a lightweight Windows desktop app (Tauri + Rust + Svelte) that m
 folders, projects and apps — and, in later versions, suggests what to archive and drifts into a
 cinematic 3D "show mode" when you step away. See [DESIGN.md](DESIGN.md) for the full plan.
 
-## Status: v0.2 (map, space and backups views)
+## Status: v0.3 (map, space, backups and cleanup)
 
 - **Fast scan:** reads the NTFS Master File Table directly (C: with 1.76M files in ~10 s) through a small elevated helper; falls back to a parallel folder walk
 - **Map:** a force-directed graph of drives, folders, projects (git repos and `Projects` folders),
@@ -17,6 +17,10 @@ cinematic 3D "show mode" when you step away. See [DESIGN.md](DESIGN.md) for the 
 - **Backups view:** where each backup goes (and whether it's up to date), a flow diagram of which folders feed which backup,
   how much of each drive is protected by 0 / 1 / 2+ backups, and which of your folders aren't backed up
   (games and reinstallable tools are labeled as such). Projects outside every backup show red on the map
+- **Cleanup:** finds projects untouched for 6+ months, games not played in 6+ months (Steam + Windows launch history),
+  apps not opened in a year, and old Downloads. One-click **Archive** (zip, verify every file, originals to the Recycle Bin),
+  **Delete** (Recycle Bin), or **Uninstall…**; snooze or never-suggest; everything can be **Restored**. Archived items
+  stay on the map as ghost dots
 - Local SQLite index
 - Treemap "space view": click to zoom into folders, breadcrumbs, biggest-items list
 - System / protected space shown as its own block, so the map adds up to what Windows reports

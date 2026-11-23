@@ -6,7 +6,8 @@
   import { fmtBytes, fmtAgo, fmtDate } from './format.js';
   import { createLayout, defaultLayout, DEFAULTS, SLIDERS, POINT_TYPES } from './layout.js';
 
-  let { data, onspace, onreveal } = $props();
+  let { data, onspace, onreveal, onchanged } = $props();
+  let restoring = $state('');
 
   const KINDS = {
     drive: { label: 'Drives', color: '#e2e8f0' },
@@ -15,6 +16,7 @@
     game: { label: 'Games', color: '#4ade80' },
     app: { label: 'Apps', color: '#a78bfa' },
     service: { label: 'Services', color: '#fb923c' },
+    archived: { label: 'Archived', color: '#475569' },
   };
   const WARN = '#f87171';
   const DIM = '#1a2333';
@@ -56,6 +58,37 @@
     return n.kind === 'folder' ? Math.max(3, s * 0.6) : s;
   }
 
+  // Final dot sizes from the editor settings: scaled by "Dot size %", and with
+  // "Shrink per level %" each dot is at most (100 - shrink)% of the dot it hangs off,
+  // so dots further down a chain are always smaller.
+  function computeSizes() {
+    const st = layout.settings;
+    const scale = (st.nodeScale ?? 100) / 100;
+    const shrink = Math.max(0, Math.min(0.95, (st.levelShrink ?? 0) / 100));
+    const parentOf = new Map();
+    for (const l of data.links) if (l.kind === 'lives_on') parentOf.set(l.source, l.target);
+    const out = new Map();
+    const sizeOf = (id) => {
+      if (out.has(id)) return out.get(id);
+      const n = byId.get(id);
+      let v = nodeSize(n) * scale;
+      const par = parentOf.get(id);
+      if (shrink > 0 && par && byId.has(par)) v = Math.min(v, sizeOf(par) * (1 - shrink));
+      v = Math.max(0.8, v);
+      out.set(id, v);
+      return v;
+    };
+    for (const n of data.nodes) sizeOf(n.id);
+    return out;
+  }
+
+  function applySizes() {
+    if (!graph || !engine) return;
+    const sizes = computeSizes();
+    for (const [id, v] of sizes) if (graph.hasNode(id)) graph.setNodeAttribute(id, 'size', v);
+    engine.setRadii(sizes);
+  }
+
   function colorOf(n) {
     if (n.kind === 'project' && n.backed_up === false) return WARN;
     return KINDS[n.kind]?.color ?? '#94a3b8';
@@ -67,7 +100,7 @@
     for (const n of data.nodes) {
       c[n.kind] = (c[n.kind] ?? 0) + 1;
       g.addNode(n.id, {
-        label: n.label, size: nodeSize(n), color: colorOf(n), kind: n.kind,
+        label: n.kind === 'archived' ? `${n.label} (archived)` : n.label, size: nodeSize(n), color: colorOf(n), kind: n.kind,
         forceLabel: n.kind === 'drive' || n.kind === 'backup', x: 0, y: 0,
       });
     }
@@ -131,7 +164,9 @@
     };
     pinnedCount = Object.keys(layout.pinned).length;
     graph = buildGraph();
-    engine = createLayout(data, layout, onTick, nodeSize);
+    const sizes0 = computeSizes();
+    graph.forEachNode((id) => { if (sizes0.has(id)) graph.setNodeAttribute(id, 'size', sizes0.get(id)); });
+    engine = createLayout(data, layout, onTick, (n) => sizes0.get(n.id) ?? nodeSize(n));
     if (!Object.keys(layout.positions).length) {
       // settle most of the way before the first frame so the map doesn't explode on screen
       engine.sim.stop();
@@ -273,6 +308,7 @@
 
   // ---- layout editor actions
   function changed(heat = 0.5) {
+    applySizes();
     engine?.update(heat);
     markDirty();
   }
@@ -307,6 +343,11 @@
     if (pointId) layout.aim[nodeId] = pointId;
     else delete layout.aim[nodeId];
     changed(0.6);
+  }
+
+  async function restoreArchived(n) {
+    restoring = n.action;
+    await invoke('cleanup_run', { op: 'restore', id: n.action });
   }
 
   function unpinSelected() {
@@ -479,8 +520,17 @@
 
   onMount(() => {
     let alive = true;
+    let unlisten = null;
     invoke('load_layout').then((saved) => { if (alive) start(saved); });
-    return () => { alive = false; stopAll(); };
+    import('@tauri-apps/api/event').then(({ listen }) =>
+      listen('cleanup-done', (e) => {
+        if (!restoring) return;
+        restoring = '';
+        if (e.payload.ok) onchanged?.();
+        else alert(e.payload.message);
+      }).then((u) => (unlisten = u)),
+    );
+    return () => { alive = false; unlisten?.(); stopAll(); };
   });
 
   const kindName = (k) => KINDS[k]?.label?.replace(/s$/, '') ?? k;
@@ -605,6 +655,9 @@
       {#if sel.scan_id && sel.dir_id}<button onclick={() => onspace?.(sel.scan_id, sel.dir_id)}>Open in Space view</button>{/if}
       {#if sel.path && sel.kind !== 'drive'}<button onclick={() => onreveal?.(sel.path)}>Show in Explorer</button>{/if}
       {#if pinnedCount >= 0 && layout.pinned[sel.id]}<button onclick={unpinSelected}>📌 Unpin</button>{/if}
+      {#if sel.kind === 'archived' && sel.action}
+        <button disabled={!!restoring} onclick={() => restoreArchived(sel)}>{restoring === sel.action ? 'Restoring…' : '↩ Restore'}</button>
+      {/if}
     </div>
     {#if neighbors.up.length}
       <h3>Lives in</h3>

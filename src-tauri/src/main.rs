@@ -2,6 +2,7 @@
 
 mod db;
 mod backups;
+mod cleanup;
 mod drives;
 mod graph;
 mod helper;
@@ -181,6 +182,74 @@ fn backup_report(state: State<AppState>) -> Result<backups::Report, String> {
     backups::report(&c).map_err(err)
 }
 
+#[tauri::command(async)]
+fn cleanup_report(state: State<AppState>) -> Result<cleanup::Report, String> {
+    let c = state.conn.lock().map_err(err)?;
+    cleanup::report(&c).map_err(err)
+}
+
+#[tauri::command(async)]
+fn cleanup_hide(key: String, days: Option<i64>) -> Result<(), String> {
+    match days {
+        Some(d) => cleanup::snooze(&key, d),
+        None => cleanup::never(&key),
+    }
+}
+
+#[tauri::command(async)]
+fn cleanup_unhide_all() -> Result<(), String> {
+    cleanup::unhide_all()
+}
+
+#[derive(Serialize, Clone)]
+struct CleanupProgress {
+    job: String,
+    phase: String,
+    done: u64,
+    total: u64,
+}
+
+#[derive(Serialize, Clone)]
+struct CleanupDone {
+    job: String,
+    ok: bool,
+    message: String,
+}
+
+/// Runs archive / delete / restore in the background; progress + result arrive as events.
+#[tauri::command(async)]
+fn cleanup_run(app: AppHandle, op: String, path: Option<String>, kind: Option<String>, id: Option<String>) -> Result<String, String> {
+    let job = format!("{}-{}", op, cleanup::now());
+    let j = job.clone();
+    std::thread::spawn(move || {
+        let last = std::sync::Mutex::new(std::time::Instant::now() - Duration::from_secs(1));
+        let report = |phase: &str, done: u64, total: u64| {
+            let mut l = last.lock().unwrap();
+            if l.elapsed() >= Duration::from_millis(120) || done == total {
+                *l = std::time::Instant::now();
+                let _ = app.emit("cleanup-progress", CleanupProgress { job: j.clone(), phase: phase.into(), done, total });
+            }
+        };
+        let prog = cleanup::Progress { report: &report };
+        let res = match op.as_str() {
+            "archive" => cleanup::archive(path.as_deref().unwrap_or(""), kind.as_deref().unwrap_or("other"), &prog)
+                .map(|a| format!("Archived {} ({} files) to {}", a.name, a.files, a.to.unwrap_or_default())),
+            "delete" => cleanup::delete(path.as_deref().unwrap_or(""), kind.as_deref().unwrap_or("other"))
+                .map(|a| format!("{} is in the Recycle Bin", a.name)),
+            "restore" => cleanup::restore(id.as_deref().unwrap_or(""), &prog).map(|p| format!("Restored to {p}")),
+            _ => Err("unknown operation".into()),
+        };
+        let (ok, message) = match res { Ok(m) => (true, m), Err(e) => (false, e) };
+        let _ = app.emit("cleanup-done", CleanupDone { job: j, ok, message });
+    });
+    Ok(job)
+}
+
+#[tauri::command(async)]
+fn open_uninstall() -> Result<(), String> {
+    std::process::Command::new("explorer").arg("ms-settings:appsfeatures").spawn().map(|_| ()).map_err(err)
+}
+
 /// The map's layout (forces, radiate/pull/push points, pinned and last positions).
 #[tauri::command(async)]
 fn load_layout() -> Option<serde_json::Value> {
@@ -308,6 +377,21 @@ fn main() {
             }
             return;
         }
+        Some("--cleanup-dump") => {
+            let out = args.get(2).cloned().unwrap_or_else(|| "cleanup.json".into());
+            if let Ok(c) = db::open(&helper::data_dir().join("index.db")) {
+                if let Ok(r) = cleanup::report(&c) {
+                    let _ = std::fs::write(out, serde_json::to_vec_pretty(&r).unwrap_or_default());
+                }
+            }
+            return;
+        }
+        Some("--cleanup-selftest") => {
+            let dir = args.get(2).cloned().unwrap_or_else(|| "selftest-archive".into());
+            let out = args.get(3).cloned().unwrap_or_else(|| "selftest.txt".into());
+            let _ = std::fs::write(out, cleanup::selftest(&dir));
+            return;
+        }
         Some("--helper") => std::process::exit(helper::run()),
         Some("--install-helper") => std::process::exit(helper::install()),
         Some("--uninstall-helper") => std::process::exit(helper::uninstall()),
@@ -352,7 +436,7 @@ fn main() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![drives, scans, view, graph, backup_report, load_layout, save_layout, reset_layout, is_scanning, start_scan, helper_status, set_fast_scan, reveal, open_path])
+        .invoke_handler(tauri::generate_handler![drives, scans, view, graph, backup_report, cleanup_report, cleanup_hide, cleanup_unhide_all, cleanup_run, open_uninstall, load_layout, save_layout, reset_layout, is_scanning, start_scan, helper_status, set_fast_scan, reveal, open_path])
         .build(tauri::generate_context!())
         .expect("error while building Cartographer");
 

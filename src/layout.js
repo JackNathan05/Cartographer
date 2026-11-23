@@ -24,9 +24,13 @@ export const DEFAULTS = {
   gravity: 0.015, // gentle pull to the middle so nothing drifts away
   straighten: 0, // pull each node's branches to line up across from its root branch (0 = off)
   untangle: 0.6, // keep branches from crossing, and dots off other branches' lines
+  nodeScale: 100, // dot size, % of normal
+  levelShrink: 0, // each level down is at least this % smaller than its parent (0 = off)
 };
 
 export const SLIDERS = [
+  { key: 'nodeScale', label: 'Dot size (%)', min: 25, max: 300, step: 5 },
+  { key: 'levelShrink', label: 'Shrink per level (%)', min: 0, max: 70, step: 1 },
   { key: 'untangle', label: 'Untangle branches (no overlaps)', min: 0, max: 1, step: 0.01 },
   { key: 'straighten', label: 'Straighten branches', min: 0, max: 1, step: 0.01 },
   { key: 'ring', label: 'Ring spacing', min: 20, max: 160, step: 1 },
@@ -412,6 +416,11 @@ export function createLayout(data, layout, onTick, radiusOf = () => 6) {
     update(heat = 0.5) {
       apply();
       sim.alpha(Math.max(sim.alpha(), heat)).restart();
+    },
+    /** dot sizes changed: new drawn radius per node id */
+    setRadii(radii) {
+      for (const n of nodes) if (radii.has(n.id)) n.r = radii.get(n.id);
+      sim.force('collide').radius((d) => d.r + 3);
     },
     pin(id, x, y) {
       const n = byId.get(id);

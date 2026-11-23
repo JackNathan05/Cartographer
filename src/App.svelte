@@ -6,6 +6,7 @@
   import Treemap from './Treemap.svelte';
   import GraphView from './GraphView.svelte';
   import BackupView from './BackupView.svelte';
+  import CleanupView from './CleanupView.svelte';
   import { fmtBytes, fmtCount, fmtAgo, fmtDate } from './format.js';
 
   let drives = $state([]);
@@ -92,6 +93,7 @@
 
   function showMap() {
     tab = 'map';
+    if (!graphData && !graphLoading && scans.length) { loadGraph(); return; }
     if (!graphData && !graphLoading && scans.length) loadGraph();
   }
 
@@ -145,7 +147,7 @@
       <img src="/icon.png" alt="" />
       <div>
         <h1>Cartographer</h1>
-        <p>v0.2 · map, space &amp; backups</p>
+        <p>v0.3 · map, space, backups &amp; cleanup</p>
       </div>
     </div>
 
@@ -213,6 +215,7 @@
         <button class:on={tab === 'map'} onclick={showMap}>Map</button>
         <button class:on={tab === 'space'} onclick={() => (tab = 'space')}>Space</button>
         <button class:on={tab === 'backups'} onclick={showBackups}>Backups</button>
+        <button class:on={tab === 'cleanup'} onclick={() => (tab = 'cleanup')}>Cleanup</button>
       </div>
       {#if tab === 'space' && view}
         <nav>
@@ -229,7 +232,11 @@
         {/if}
       {/if}
     </header>
-    {#if tab === 'backups'}
+    {#if tab === 'cleanup'}
+      <div class="body single">
+        <CleanupView onspace={openSpace} onreveal={(p) => invoke('reveal', { path: p })} onchanged={() => { graphData = null; }} />
+      </div>
+    {:else if tab === 'backups'}
       {#if backupData}
         <div class="body single">
           <BackupView report={backupData} onspace={openSpace} onreveal={(p) => invoke('reveal', { path: p })} />
@@ -241,7 +248,7 @@
       {#if graphData}
         <div class="body">
           {#key graphData}
-            <GraphView data={graphData} onspace={openSpace} onreveal={(p) => invoke('reveal', { path: p })} />
+            <GraphView data={graphData} onspace={openSpace} onreveal={(p) => invoke('reveal', { path: p })} onchanged={loadGraph} />
           {/key}
         </div>
       {:else}

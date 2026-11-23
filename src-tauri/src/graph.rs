@@ -26,6 +26,7 @@ pub struct Node {
     pub backed_up: Option<bool>,
     pub backups: Vec<String>,
     pub detail: Option<String>,
+    pub action: Option<String>, // cleanup action id (archived ghost dots)
 }
 
 #[derive(Serialize, Clone)]
@@ -431,7 +432,7 @@ pub fn build(conn: &Connection) -> rusqlite::Result<GraphData> {
         nodes.push(Node {
             id, kind: "drive", label, path: Some(format!("{}:\\", d.letter)), size: d.total - d.free,
             newest: 0, scan_id: root.map(|r| r.scan), dir_id: root.map(|r| r.id), backed_up: None, backups: vec![],
-            detail: Some(format!("{} free of {}", crate::fmt_gb(d.free), crate::fmt_gb(d.total))),
+            action: None, detail: Some(format!("{} free of {}", crate::fmt_gb(d.free), crate::fmt_gb(d.total))),
         });
     }
 
@@ -454,7 +455,7 @@ pub fn build(conn: &Connection) -> rusqlite::Result<GraphData> {
         nodes.push(Node {
             id: id.clone(), kind: "folder", label: last_segment(&p), path: Some(p), size: i.map(|x| x.size).unwrap_or(0),
             newest: i.map(|x| x.newest).unwrap_or(0), scan_id: i.map(|x| x.scan), dir_id: i.map(|x| x.id),
-            backed_up: None, backups: vec![], detail: None,
+            backed_up: None, backups: vec![], action: None, detail: None,
         });
         links.push(Link { source: id.clone(), target: up, kind: "lives_on" });
         Some(id)
@@ -481,7 +482,20 @@ pub fn build(conn: &Connection) -> rusqlite::Result<GraphData> {
         nodes.push(Node {
             id: id.clone(), kind: l.kind, label: l.label.clone(), path: Some(norm(&l.path)), size,
             newest: i.map(|x| x.newest).unwrap_or(0), scan_id: i.map(|x| x.scan), dir_id: i.map(|x| x.id),
-            backed_up: None, backups: vec![], detail: l.detail.clone(),
+            backed_up: None, backups: vec![], action: None, detail: l.detail.clone(),
+        });
+        links.push(Link { source: id, target: up, kind: "lives_on" });
+    }
+
+    // archived items stay on the map as faded "ghost" dots you can restore from
+    for a in crate::cleanup::load_state().actions.iter().filter(|a| a.kind == "archive" && a.restored.is_none()) {
+        let Some(up) = parent(&a.from).and_then(|pp| ensure_folder(&pp, &info, &mut nodes, &mut index, &mut links)) else { continue };
+        let id = format!("archived:{}", a.id);
+        index.insert(id.clone(), nodes.len());
+        nodes.push(Node {
+            id: id.clone(), kind: "archived", label: a.name.clone(), path: Some(a.from.clone()), size: a.bytes as i64,
+            newest: a.time, scan_id: None, dir_id: None, backed_up: None, backups: vec![],
+            action: Some(a.id.clone()), detail: Some(format!("Archived · zip at {}", a.to.clone().unwrap_or_default())),
         });
         links.push(Link { source: id, target: up, kind: "lives_on" });
     }
