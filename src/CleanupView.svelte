@@ -11,8 +11,9 @@
   let error = $state('');
   let filter = $state('all');
   let confirm = $state(null); // suggestion or action awaiting a yes
-  let job = $state(null); // { id, label, phase, done, total }
-  let toast = $state(null); // { ok, message }
+  // Lives in the app, not this tab, so it survives switching tabs: { running, queue, results }
+  let jobs = $state({ running: null, queue: [], results: [] });
+  let flash = $state(''); // a one-off problem, e.g. "already in the queue"
 
   const KIND = {
     project: { label: 'Projects', color: '#38bdf8' },
@@ -44,12 +45,28 @@
     await load();
   }
 
+  const job = $derived(jobs.running);
+  // path / restore id -> 'running' or its place in the queue (1, 2, ...)
+  const jobOf = $derived.by(() => {
+    const m = {};
+    if (jobs.running) m[jobs.running.path ?? jobs.running.id] = 'running';
+    jobs.queue.forEach((q, i) => (m[q.path ?? q.id] = { n: i + 1, job: q.job }));
+    return m;
+  });
+
   async function run(op, args, label) {
     confirm = null;
-    toast = null;
-    const id = await invoke('cleanup_run', { op, ...args });
-    job = { id, label, phase: 'starting', done: 0, total: 0 };
+    flash = '';
+    try {
+      await invoke('cleanup_run', { op, ...args, label });
+    } catch (e) {
+      flash = String(e);
+    }
   }
+
+  const unqueue = (job) => invoke('cleanup_unqueue', { job });
+  const dismiss = (r) => invoke('cleanup_ack', { job: r.job });
+  const dismissAll = () => jobs.results.forEach(dismiss);
 
   function doAction(s) {
     if (s.action === 'uninstall') { invoke('open_uninstall'); return; }
@@ -60,16 +77,15 @@
     load();
     const un = [];
     (async () => {
+      un.push(await listen('cleanup-jobs', (e) => (jobs = e.payload)));
       un.push(await listen('cleanup-progress', (e) => {
-        if (job && e.payload.job === job.id) job = { ...job, ...e.payload };
+        if (jobs.running?.job === e.payload.job) jobs.running = { ...jobs.running, ...e.payload };
       }));
       un.push(await listen('cleanup-done', async (e) => {
-        if (job && e.payload.job !== job.id) return;
-        job = null;
-        toast = { ok: e.payload.ok, message: e.payload.message };
         await load();
         if (e.payload.ok) onchanged?.();
       }));
+      jobs = await invoke('cleanup_jobs');
     })();
     return () => un.forEach((f) => f());
   });
@@ -96,17 +112,33 @@
     <div class="job">
       <div class="spinner"></div>
       <div class="jt">
-        <b>{job.label}</b>
+        <b class:pvt={privacy.on}>{job.label}</b>
         <span>{job.phase}{job.total ? ` · ${fmtBytes(job.done)} of ${fmtBytes(job.total)}` : ''}</span>
         {#if job.total}<div class="jbar"><div style="width:{Math.min(100, (job.done / job.total) * 100)}%"></div></div>{/if}
+        {#if jobs.queue.length}
+          <div class="queue">
+            <span class="qh">Up next · starts by itself when the one before finishes. Your PC won't go to sleep until the queue is done.</span>
+            <ol>
+              {#each jobs.queue as q (q.job)}
+                <li><span class:pvt={privacy.on}>{q.label}</span><button class="link" onclick={() => unqueue(q.job)}>Remove</button></li>
+              {/each}
+            </ol>
+          </div>
+        {/if}
       </div>
     </div>
   {/if}
-  {#if toast}
-    <div class="toast" class:bad={!toast.ok}>
-      <span>{toast.ok ? '✓' : '!'}</span>{toast.message}
-      <button onclick={() => (toast = null)}>✕</button>
+  {#if flash}
+    <div class="toast bad"><span>!</span>{flash}<button onclick={() => (flash = '')}>✕</button></div>
+  {/if}
+  {#each jobs.results as r (r.job)}
+    <div class="toast" class:bad={!r.ok}>
+      <span>{r.ok ? '✓' : '!'}</span><span class="msg" class:pvt={privacy.on}>{r.message}</span>
+      <button onclick={() => dismiss(r)}>✕</button>
     </div>
+  {/each}
+  {#if jobs.results.length > 1}
+    <button class="link dismiss-all" onclick={dismissAll}>Dismiss all {jobs.results.length}</button>
   {/if}
 
   {#if report}
@@ -139,8 +171,17 @@
               <div class="path" class:pvt={privacy.on}>{pv(s.path)}</div>
             </div>
             <div class="btns">
-              <button class="primary" disabled={!!job} onclick={() => (s.action === 'uninstall' ? doAction(s) : (confirm = s))}>{ACTION[s.action].verb}</button>
+              {#if jobOf[s.path] === 'running'}
+                <button class="primary" disabled>Working…</button>
+              {:else if jobOf[s.path]}
+                <button class="primary queued" disabled>Queued #{jobOf[s.path].n}</button>
+              {:else if job && s.action !== 'uninstall'}
+                <button class="primary" title="Starts by itself when the current one finishes" onclick={() => doAction(s)}>Queue</button>
+              {:else}
+                <button class="primary" onclick={() => (s.action === 'uninstall' ? doAction(s) : (confirm = s))}>{ACTION[s.action].verb}</button>
+              {/if}
               <div class="small">
+                {#if jobOf[s.path] && jobOf[s.path] !== 'running'}<button onclick={() => unqueue(jobOf[s.path].job)}>Remove from queue</button>{/if}
                 <button onclick={() => hide(s, 30)}>Snooze 30 days</button>
                 <button onclick={() => hide(s, null)}>Never suggest</button>
                 <button onclick={() => onreveal?.(s.path)}>Show</button>
@@ -169,7 +210,15 @@
               <div class="path" class:pvt={privacy.on}>from {pv(a.from)}{a.to ? ` · zip: ${pv(a.to)}` : ''}</div>
             </div>
             <div class="btns">
-              <button class="primary" disabled={!!job} onclick={() => (confirm = { restore: a })}>Restore</button>
+              {#if jobOf[a.id] === 'running'}
+                <button class="primary" disabled>Restoring…</button>
+              {:else if jobOf[a.id]}
+                <button class="primary queued" disabled>Queued #{jobOf[a.id].n}</button>
+              {:else if job}
+                <button class="primary" title="Starts by itself when the current one finishes" onclick={() => run('restore', { id: a.id }, `Restore ${a.name}`)}>Queue restore</button>
+              {:else}
+                <button class="primary" onclick={() => (confirm = { restore: a })}>Restore</button>
+              {/if}
               {#if a.to}<div class="small"><button onclick={() => onreveal?.(a.to)}>Show zip</button></div>{/if}
             </div>
           </li>
@@ -199,7 +248,7 @@
         <h3>Restore {pv(a.name)}?</h3>
         <p>{a.kind === 'archive' ? `Unzips it back to ${pv(a.from)}, checks every file came back, then sends the zip to the Recycle Bin.` : `Takes it back out of the Recycle Bin to ${pv(a.from)}.`}</p>
         <div class="row">
-          <button class="primary" onclick={() => run('restore', { id: a.id }, `Restore ${pv(a.name)}`)}>Restore</button>
+          <button class="primary" onclick={() => run('restore', { id: a.id }, `Restore ${a.name}`)}>Restore</button>
           <button onclick={() => (confirm = null)}>Cancel</button>
         </div>
       {:else}
@@ -228,7 +277,7 @@
   h2 { font-size: 11.5px; text-transform: uppercase; letter-spacing: 1.3px; color: var(--muted); margin: 0 0 8px; }
   code { font-size: 12px; color: #8aa0bd; }
   .err { margin-top: 12px; padding: 9px 12px; border-radius: 8px; background: #2a1215; border: 1px solid #6b2229; color: #fca5a5; font-size: 13px; }
-  .job { margin-top: 14px; display: flex; gap: 12px; align-items: center; padding: 12px 14px; border-radius: 10px; background: #0f1f26; border: 1px solid #1d4a47; }
+  .job { margin-top: 14px; display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border-radius: 10px; background: #0f1f26; border: 1px solid #1d4a47; }
   .jt { flex: 1; display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
   .jt span { color: var(--muted); font-size: 12px; }
   .jbar { height: 5px; border-radius: 3px; background: #16303a; overflow: hidden; margin-top: 3px; }
@@ -236,6 +285,15 @@
   .spinner { width: 18px; height: 18px; border-radius: 50%; border: 2px solid #1d4a47; border-top-color: #5eead4; animation: spin 0.8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .toast { margin-top: 14px; display: flex; gap: 10px; align-items: center; padding: 10px 14px; border-radius: 10px; background: #0f1f26; border: 1px solid #1d4a47; color: #ccfbf1; font-size: 13px; }
+  .toast + .toast { margin-top: 6px; }
+  .toast .msg { overflow-wrap: anywhere; }
+  .dismiss-all { margin-top: 6px; font-size: 12px; }
+  .queue { margin-top: 8px; font-size: 12px; }
+  .queue .qh { color: var(--muted); }
+  .queue ol { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 3px; }
+  .queue li { color: #ccfbf1; }
+  .queue li button { margin-left: 10px; font-size: 12px; }
+  .primary.queued { opacity: 0.75; }
   .toast.bad { background: #2a1215; border-color: #6b2229; color: #fecaca; }
   .toast button { margin-left: auto; color: var(--muted); }
   .filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px; }

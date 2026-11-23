@@ -120,3 +120,5 @@ footer .warn { color: var(--warn); }
 .tabs .badge { margin-left: 6px; display: inline-block; min-width: 17px; padding: 0 5px; border-radius: 99px; background: #b45309; color: #fff7ed; font-size: 10.5px; font-weight: 700; line-height: 16px; text-align: center; }
 
 .okline { font-size: 12px; color: #5eead4; }
+.busy { display: inline-block; width: 8px; height: 8px; margin-left: 6px; border-radius: 50%; border: 2px solid #5eead4; border-right-color: transparent; animation: spin 0.9s linear infinite; vertical-align: -1px; }
+.qn { font-style: normal; font-size: 11px; color: #5eead4; margin-left: 4px; }

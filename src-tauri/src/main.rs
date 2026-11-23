@@ -239,33 +239,239 @@ struct CleanupDone {
     message: String,
 }
 
-/// Runs archive / delete / restore in the background; progress + result arrive as events.
+/// One archive / delete / restore, running or waiting in the queue.
+#[derive(Serialize, Clone)]
+struct CleanupJob {
+    job: String,
+    label: String,
+    op: String,
+    path: Option<String>,
+    kind: Option<String>,
+    id: Option<String>,
+    phase: String,
+    done: u64,
+    total: u64,
+}
+
+/// What Cleanup is doing: the job that's running, the ones queued after it (run one at a time,
+/// in order), and results you haven't dismissed yet. Kept here, not in the Cleanup tab, so it
+/// survives switching tabs or closing and reopening the window.
+#[derive(Serialize, Clone, Default)]
+struct CleanupJobs {
+    running: Option<CleanupJob>,
+    queue: Vec<CleanupJob>,
+    results: Vec<CleanupDone>,
+}
+
+static CLEANUP_JOBS: Mutex<CleanupJobs> = Mutex::new(CleanupJobs { running: None, queue: Vec::new(), results: Vec::new() });
+static CLEANUP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn cleanup_snapshot() -> CleanupJobs {
+    CLEANUP_JOBS.lock().map(|j| j.clone()).unwrap_or_default()
+}
+
+/// Sends an event to the window (or, in the queue self-test, nowhere).
+type Emit = Arc<dyn Fn(&str, serde_json::Value) + Send + Sync>;
+
+fn emitter(app: AppHandle) -> Emit {
+    Arc::new(move |name: &str, v: serde_json::Value| {
+        let _ = app.emit(name, v);
+    })
+}
+
+/// Tells every open view (Cleanup tab, tab-bar spinner) what the queue looks like now.
+fn cleanup_changed(emit: &Emit) {
+    emit("cleanup-jobs", serde_json::to_value(cleanup_snapshot()).unwrap_or_default());
+}
+
+#[tauri::command]
+fn cleanup_jobs() -> CleanupJobs {
+    cleanup_snapshot()
+}
+
+/// You dismissed a result; don't show it again.
+#[tauri::command]
+fn cleanup_ack(app: AppHandle, job: String) {
+    if let Ok(mut j) = CLEANUP_JOBS.lock() {
+        j.results.retain(|r| r.job != job);
+    }
+    cleanup_changed(&emitter(app));
+}
+
+/// Takes a job out of the queue before it starts (the running one can't be stopped halfway).
+#[tauri::command]
+fn cleanup_unqueue(app: AppHandle, job: String) {
+    if let Ok(mut j) = CLEANUP_JOBS.lock() {
+        j.queue.retain(|q| q.job != job);
+    }
+    cleanup_changed(&emitter(app));
+}
+
+/// Archive / delete / restore. Starts now if nothing is running, otherwise joins the queue and
+/// starts by itself when the ones before it finish. Progress and results arrive as events.
+/// Jobs never overlap: two archives touching the same files would fight over them.
 #[tauri::command(async)]
-fn cleanup_run(app: AppHandle, op: String, path: Option<String>, kind: Option<String>, id: Option<String>) -> Result<String, String> {
-    let job = format!("{}-{}", op, cleanup::now());
-    let j = job.clone();
-    std::thread::spawn(move || {
+fn cleanup_run(app: AppHandle, op: String, path: Option<String>, kind: Option<String>, id: Option<String>, label: Option<String>) -> Result<String, String> {
+    cleanup_enqueue(emitter(app), op, path, kind, id, label)
+}
+
+fn cleanup_enqueue(emit: Emit, op: String, path: Option<String>, kind: Option<String>, id: Option<String>, label: Option<String>) -> Result<String, String> {
+    let n = CLEANUP_SEQ.fetch_add(1, Ordering::SeqCst);
+    let job = format!("{}-{}-{n}", op, cleanup::now());
+    let task = CleanupJob {
+        job: job.clone(), label: label.unwrap_or_else(|| op.clone()), op, path, kind, id,
+        phase: "starting".into(), done: 0, total: 0,
+    };
+    let start = {
+        let mut jobs = CLEANUP_JOBS.lock().map_err(err)?;
+        let same = |o: &CleanupJob| (task.path.is_some() && o.path == task.path) || (task.id.is_some() && o.id == task.id);
+        if jobs.running.iter().chain(jobs.queue.iter()).any(same) {
+            return Err(format!("\"{}\" is already running or in the queue.", task.label));
+        }
+        if jobs.running.is_none() {
+            jobs.running = Some(task.clone());
+            true
+        } else {
+            jobs.queue.push(task.clone());
+            false
+        }
+    };
+    cleanup_changed(&emit);
+    if start {
+        std::thread::spawn(move || cleanup_worker(emit, task));
+    }
+    Ok(job)
+}
+
+/// Runs `first`, then each queued job in turn until the queue is empty. Keeps the PC from going
+/// to sleep while it works (Windows' own request, released when the queue is done).
+fn cleanup_worker(emit: Emit, first: CleanupJob) {
+    use windows_sys::Win32::System::Power::{SetThreadExecutionState, ES_CONTINUOUS, ES_SYSTEM_REQUIRED};
+    unsafe { SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED) };
+    let mut task = Some(first);
+    while let Some(t) = task {
+        let j = t.job.clone();
         let last = std::sync::Mutex::new(std::time::Instant::now() - Duration::from_secs(1));
         let report = |phase: &str, done: u64, total: u64| {
             let mut l = last.lock().unwrap();
             if l.elapsed() >= Duration::from_millis(120) || done == total {
                 *l = std::time::Instant::now();
-                let _ = app.emit("cleanup-progress", CleanupProgress { job: j.clone(), phase: phase.into(), done, total });
+                if let Ok(mut jobs) = CLEANUP_JOBS.lock() {
+                    if let Some(r) = jobs.running.as_mut() {
+                        r.phase = phase.into();
+                        r.done = done;
+                        r.total = total;
+                    }
+                }
+                emit("cleanup-progress", serde_json::to_value(CleanupProgress { job: j.clone(), phase: phase.into(), done, total }).unwrap_or_default());
             }
         };
         let prog = cleanup::Progress { report: &report };
-        let res = match op.as_str() {
-            "archive" => cleanup::archive(path.as_deref().unwrap_or(""), kind.as_deref().unwrap_or("other"), &prog)
+        let (path, kind, id) = (t.path.as_deref().unwrap_or(""), t.kind.as_deref().unwrap_or("other"), t.id.as_deref().unwrap_or(""));
+        // catch_unwind: a crash in one job must not stall the queue or leave Cleanup locked
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match t.op.as_str() {
+            "archive" => cleanup::archive(path, kind, &prog)
                 .map(|a| format!("Archived {} ({} files) to {}", a.name, a.files, a.to.unwrap_or_default())),
-            "delete" => cleanup::delete(path.as_deref().unwrap_or(""), kind.as_deref().unwrap_or("other"))
-                .map(|a| format!("{} is in the Recycle Bin", a.name)),
-            "restore" => cleanup::restore(id.as_deref().unwrap_or(""), &prog).map(|p| format!("Restored to {p}")),
+            "delete" => cleanup::delete(path, kind).map(|a| format!("{} is in the Recycle Bin", a.name)),
+            "restore" => cleanup::restore(id, &prog).map(|p| format!("Restored to {p}")),
             _ => Err("unknown operation".into()),
+        }))
+        .unwrap_or_else(|_| Err("Something went wrong partway through. Check the Archive folder and the Recycle Bin.".into()));
+        let (ok, message) = match res { Ok(m) => (true, m), Err(e) => (false, format!("{}: {e}", t.label)) };
+        let done = CleanupDone { job: j, ok, message };
+        task = match CLEANUP_JOBS.lock() {
+            Ok(mut jobs) => {
+                jobs.results.push(done.clone());
+                let extra = jobs.results.len().saturating_sub(30);
+                jobs.results.drain(..extra);
+                let next = if jobs.queue.is_empty() { None } else { Some(jobs.queue.remove(0)) };
+                jobs.running = next.clone();
+                next
+            }
+            Err(_) => None,
         };
-        let (ok, message) = match res { Ok(m) => (true, m), Err(e) => (false, e) };
-        let _ = app.emit("cleanup-done", CleanupDone { job: j, ok, message });
+        emit("cleanup-done", serde_json::to_value(&done).unwrap_or_default());
+        cleanup_changed(&emit);
+    }
+    unsafe { SetThreadExecutionState(ES_CONTINUOUS) };
+}
+
+/// `--queue-selftest <scratch archive dir> <out>`: queues archives of three throwaway folders it
+/// makes in Documents, removes one from the queue, checks a duplicate is refused and they run
+/// one at a time in order, then queues restores to put everything back. Touches nothing else.
+fn queue_selftest(archive_to: &str) -> String {
+    use std::fmt::Write as _;
+    use std::path::Path;
+    std::env::set_var("CARTOGRAPHER_ARCHIVE_DIR", archive_to);
+    std::env::set_var("CARTOGRAPHER_STATE_FILE", PathBuf::from(archive_to).join("selftest-cleanup.json"));
+    let mut log = String::new();
+    let check = |log: &mut String, label: &str, ok: bool| { let _ = writeln!(log, "{} {label}", if ok { "PASS" } else { "FAIL" }); };
+    let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let ev = events.clone();
+    let emit: Emit = Arc::new(move |name: &str, v: serde_json::Value| {
+        if name == "cleanup-done" {
+            ev.lock().unwrap().push(format!("{}|{}|{}", v["job"].as_str().unwrap_or(""), v["ok"], v["message"].as_str().unwrap_or("")));
+        }
     });
-    Ok(job)
+    let docs = format!(r"{}\Documents", std::env::var("USERPROFILE").unwrap_or_default());
+    let t = cleanup::now();
+    let mk = |name: &str, mb: usize| {
+        let d = PathBuf::from(format!(r"{docs}\_cartographer_queuetest_{t}_{name}"));
+        std::fs::create_dir_all(d.join("sub")).ok();
+        let mut x: u64 = 0x2545F4914F6CDD1D ^ mb as u64;
+        let data: Vec<u8> = (0..mb * 1024 * 1024).map(|_| { x ^= x << 13; x ^= x >> 7; x ^= x << 17; x as u8 }).collect();
+        std::fs::write(d.join("sub").join("data.bin"), &data).ok();
+        std::fs::write(d.join("readme.txt"), name).ok();
+        d.to_string_lossy().to_string()
+    };
+    let (a, b, c) = (mk("A", 150), mk("B", 5), mk("C", 5));
+    let q = |p: &str, l: &str| cleanup_enqueue(emit.clone(), "archive".into(), Some(p.into()), Some("project".into()), None, Some(l.into()));
+    let ja = q(&a, "Archive A");
+    let jb = q(&b, "Archive B");
+    let dup = q(&a, "Archive A again");
+    let jc = q(&c, "Archive C");
+    check(&mut log, "A starts, B and C queue", ja.is_ok() && jb.is_ok() && jc.is_ok());
+    check(&mut log, &format!("same folder twice is refused ({})", dup.as_ref().err().cloned().unwrap_or_default()), dup.is_err());
+    let snap = cleanup_snapshot();
+    let ok = snap.running.as_ref().map_or(false, |r| r.label == "Archive A") && snap.queue.len() == 2;
+    check(&mut log, &format!("A running, 2 waiting (running={} queue={})", snap.running.as_ref().map_or("-", |r| r.label.as_str()), snap.queue.len()), ok);
+    if let Ok(jc) = &jc {
+        if let Ok(mut j) = CLEANUP_JOBS.lock() {
+            j.queue.retain(|x| &x.job != jc);
+        }
+    }
+    let wait = || {
+        let t0 = Instant::now();
+        while cleanup_snapshot().running.is_some() && t0.elapsed() < Duration::from_secs(300) {
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    };
+    wait();
+    let evs: Vec<String> = events.lock().unwrap().clone();
+    for e in &evs {
+        let _ = writeln!(log, "     done: {e}");
+    }
+    let in_order = evs.len() == 2
+        && evs[0].starts_with(ja.as_deref().unwrap_or("?"))
+        && evs[1].starts_with(jb.as_deref().unwrap_or("?"))
+        && evs.iter().all(|e| e.contains("|true|"));
+    check(&mut log, "both ran, A then B, both ok", in_order);
+    check(&mut log, "A and B moved out", !Path::new(&a).exists() && !Path::new(&b).exists());
+    check(&mut log, "C (removed from queue) untouched", Path::new(&c).join("readme.txt").exists());
+    let snap = cleanup_snapshot();
+    check(&mut log, "queue empty, 2 results kept", snap.queue.is_empty() && snap.results.len() == 2);
+
+    // put it back: queue both restores at once
+    let st = cleanup::load_state();
+    for act in st.actions.iter().filter(|x| x.restored.is_none() && (x.from == crate::graph::norm(&a) || x.from == crate::graph::norm(&b))) {
+        let _ = cleanup_enqueue(emit.clone(), "restore".into(), None, None, Some(act.id.clone()), Some(format!("Restore {}", act.name)));
+    }
+    wait();
+    check(&mut log, "queued restores brought A and B back", Path::new(&a).join("sub").join("data.bin").exists() && Path::new(&b).join("readme.txt").exists());
+    for d in [&a, &b, &c] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+    log
 }
 
 #[tauri::command(async)]
@@ -545,6 +751,12 @@ fn main() {
             let _ = std::fs::OpenOptions::new().create(true).append(true).open(out).and_then(|mut f| { use std::io::Write; f.write_all(res.as_bytes()) });
             return;
         }
+        Some("--queue-selftest") => {
+            let dir = args.get(2).cloned().unwrap_or_else(|| "selftest-archive".into());
+            let out = args.get(3).cloned().unwrap_or_else(|| "queue-selftest.txt".into());
+            let _ = std::fs::write(out, queue_selftest(&dir));
+            return;
+        }
         Some("--cleanup-selftest") => {
             let dir = args.get(2).cloned().unwrap_or_else(|| "selftest-archive".into());
             let out = args.get(3).cloned().unwrap_or_else(|| "selftest.txt".into());
@@ -683,7 +895,7 @@ fn main() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![drives, scans, view, graph, health_report, get_settings, set_settings, show_status, show_preview, show_exit, backup_report, cleanup_report, cleanup_hide, cleanup_unhide_all, cleanup_run, open_uninstall, load_layout, save_layout, reset_layout, is_scanning, start_scan, helper_status, set_fast_scan, reveal, open_path, timeline, projects_report, open_in_editor, open_terminal, open_url, ask_status, ask_set_key, ask_new, ask_question, screensaver_status, screensaver_install])
+        .invoke_handler(tauri::generate_handler![drives, scans, view, graph, health_report, get_settings, set_settings, show_status, show_preview, show_exit, backup_report, cleanup_report, cleanup_hide, cleanup_unhide_all, cleanup_run, cleanup_jobs, cleanup_ack, cleanup_unqueue, open_uninstall, load_layout, save_layout, reset_layout, is_scanning, start_scan, helper_status, set_fast_scan, reveal, open_path, timeline, projects_report, open_in_editor, open_terminal, open_url, ask_status, ask_set_key, ask_new, ask_question, screensaver_status, screensaver_install])
         .build(tauri::generate_context!())
         .expect("error while building Cartographer");
 

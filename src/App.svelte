@@ -31,6 +31,8 @@
   let showNote = $state('');
   let healthCount = $state(0);
   let scrOn = $state(false); // Windows uses Cartographer.scr as its screensaver
+  let cleanupBusy = $state(''); // phase of a running archive / delete / restore
+  let cleanupQueued = $state(0); // jobs waiting after it
   let bgScan = $state(false); // a live-update rescan is running
 
   const scanFor = (letter) => scans.find((s) => s.root.toUpperCase().startsWith(letter + ':'));
@@ -174,6 +176,10 @@
       privacy.obs = (await invoke('show_status')).obs;
       applyPrivacy();
       un.push(await listen('obs-changed', (e) => { privacy.obs = !!e.payload; applyPrivacy(); }));
+      const cleanupJobs = (j) => { cleanupBusy = j.running?.phase ?? ''; cleanupQueued = j.queue.length; };
+      un.push(await listen('cleanup-jobs', (e) => cleanupJobs(e.payload)));
+      un.push(await listen('cleanup-progress', (e) => (cleanupBusy = e.payload.phase)));
+      invoke('cleanup_jobs').then(cleanupJobs).catch(() => {});
     })();
     return () => un.forEach((f) => f());
   });
@@ -299,7 +305,7 @@
         <button class:on={tab === 'map'} onclick={showMap}>Map</button>
         <button class:on={tab === 'space'} onclick={() => (tab = 'space')}>Space</button>
         <button class:on={tab === 'backups'} onclick={showBackups}>Backups</button>
-        <button class:on={tab === 'cleanup'} onclick={() => (tab = 'cleanup')}>Cleanup</button>
+        <button class:on={tab === 'cleanup'} onclick={() => (tab = 'cleanup')} title={cleanupBusy ? `Working: ${cleanupBusy}${cleanupQueued ? `, ${cleanupQueued} queued` : ''}` : undefined}>Cleanup{#if cleanupBusy}<span class="busy"></span>{#if cleanupQueued}<em class="qn">+{cleanupQueued}</em>{/if}{/if}</button>
         <button class:on={tab === 'projects'} onclick={() => (tab = 'projects')}>Projects</button>
         <button class:on={tab === 'timeline'} onclick={() => (tab = 'timeline')}>Timeline</button>
         <button class:on={tab === 'ask'} onclick={() => (tab = 'ask')}>✦ Ask</button>

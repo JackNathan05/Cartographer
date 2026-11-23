@@ -640,7 +640,19 @@ pub fn archive(path: &str, item_kind: &str, prog: &Progress) -> Result<Action, S
 
     // 4. originals to the Recycle Bin
     (prog.report)("moving originals to the Recycle Bin", total, total);
-    trash::delete(&src).map_err(|e| format!("Zip saved and verified at {}, but the originals couldn't be moved to the Recycle Bin: {e}", zip_path.display()))?;
+    if let Err(e) = trash::delete(&src) {
+        if src.exists() {
+            // Nothing was moved (Windows moves a folder to the Recycle Bin in one go), so undo the
+            // zip too and leave things exactly as they were.
+            let _ = std::fs::remove_file(&zip_path);
+            return Err(format!(
+                "The zip checked out, but Windows wouldn't move the originals to the Recycle Bin ({e}). \
+                 Usually a file in it is open in another app (an editor, a terminal, a running program). \
+                 Nothing was changed: close it and try again."
+            ));
+        }
+        // the originals did go: carry on and log the archive
+    }
 
     let zip_bytes = std::fs::metadata(&zip_path).map(|m| m.len()).unwrap_or(0);
     let a = Action {
@@ -768,6 +780,21 @@ pub fn selftest(archive_to: &str) -> String {
         }
         Err(e) => { let _ = writeln!(log, "FAIL archive: {e}"); }
     }
+    // a file held open (like an editor would) blocks the Recycle Bin: nothing may change
+    if src.exists() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let zips = |d: &Path| walkdir::WalkDir::new(d).into_iter().flatten().filter(|e| e.path().extension().map_or(false, |x| x == "zip")).count();
+        let before = zips(Path::new(archive_to));
+        let lock = std::fs::OpenOptions::new().read(true).share_mode(1 /* FILE_SHARE_READ only */).open(src.join(r"sub\b.bin"));
+        let r = archive(&src_s, "project", &prog);
+        drop(lock);
+        check("locked file: archive refused", r.is_err(), &mut log);
+        if let Err(e) = &r { let _ = writeln!(log, "     message: {e}"); }
+        check("locked file: originals untouched", files.iter().all(|(rel, data)| std::fs::read(src.join(rel)).map(|b| &b == data).unwrap_or(false)), &mut log);
+        check("locked file: no zip left behind", zips(Path::new(archive_to)) == before, &mut log);
+        check("locked file: nothing logged", load_state().actions.iter().filter(|a| a.from == norm(&src_s) && a.restored.is_none()).count() == 0, &mut log);
+    }
+
     // refuse dangerous paths
     check(r"safety: refuses C:\Windows", allowed(r"C:\Windows\System32").is_err(), &mut log);
     check("safety: refuses a drive root", allowed("E:\\").is_err(), &mut log);
