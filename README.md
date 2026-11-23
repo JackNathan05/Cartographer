@@ -9,7 +9,7 @@ Cartographer is a lightweight Windows desktop app (Tauri + Rust + Svelte) that m
 folders, projects and apps — and, in later versions, suggests what to archive and drifts into a
 cinematic 3D "show mode" when you step away. See [DESIGN.md](DESIGN.md) for the full plan.
 
-## Status: v0.4 (3D, Show mode, Privacy mode)
+## Status: v0.5 (health dashboard, live updates)
 
 - **Fast scan:** reads the NTFS Master File Table directly (C: with 1.76M files in ~10 s) through a small elevated helper; falls back to a parallel folder walk
 - **Map:** a force-directed graph of drives, folders, projects (git repos and `Projects` folders),
@@ -27,6 +27,11 @@ cinematic 3D "show mode" when you step away. See [DESIGN.md](DESIGN.md) for the 
   Windows still sleeps; 30 fps cap. Preview button in the sidebar
 - **Privacy mode:** real structure and sizes, every name replaced with random letters *then* blurred (the real text is
   never drawn). Can switch on automatically while OBS is open
+- **Health:** one page of green / yellow / red checks: backup freshness and connection, free space per drive,
+  Windows' own disk health (Get-PhysicalDisk), Recycle Bin / Temp / Desktop / old Downloads, unused items, how fresh
+  each drive's scan is, and folders that aren't backed up. Each issue links to where you fix it; the tab shows a badge
+- **Live updates:** every NTFS drive is watched for changes (noise like Temp, caches, Windows and the Recycle Bin is
+  ignored); a changed drive is rescanned in the background at most every 30 min, only after a minute of no input
 - Local SQLite index
 - Treemap "space view": click to zoom into folders, breadcrumbs, biggest-items list
 - System / protected space shown as its own block, so the map adds up to what Windows reports

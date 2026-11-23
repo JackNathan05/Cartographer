@@ -7,6 +7,7 @@
   import GraphView from './GraphView.svelte';
   import BackupView from './BackupView.svelte';
   import CleanupView from './CleanupView.svelte';
+  import HealthView from './HealthView.svelte';
   import { fmtBytes, fmtCount, fmtAgo, fmtDate } from './format.js';
   import { privacy, pv } from './privacy.svelte.js';
 
@@ -25,6 +26,8 @@
   let backupData = $state(null);
   let settings = $state(null); // show mode + privacy (settings.json)
   let showNote = $state('');
+  let healthCount = $state(0);
+  let bgScan = $state(false); // a live-update rescan is running
 
   const scanFor = (letter) => scans.find((s) => s.root.toUpperCase().startsWith(letter + ':'));
   const kids = $derived(view?.node?.children ?? []);
@@ -141,8 +144,10 @@
       if (scans.length) loadGraph(); else tab = 'space';
       if (await invoke('is_scanning')) progress = { root: '', files: 0, dirs: 0, bytes: 0, seconds: 0 };
       un.push(await listen('scan-progress', (e) => (progress = e.payload)));
+      un.push(await listen('scan-started', () => { if (!progress) { bgScan = true; progress = { root: '', files: 0, dirs: 0, bytes: 0, seconds: 0 }; } }));
       un.push(await listen('scan-done', async (e) => {
         progress = null;
+        bgScan = false;
         await refresh();
         const s = scans.find((x) => x.id === e.payload.scan_id);
         if (s) openScan(s);
@@ -151,6 +156,7 @@
       }));
       un.push(await listen('scan-error', (e) => { progress = null; error = String(e.payload); }));
       settings = await invoke('get_settings');
+      invoke('health_report').then((h) => (healthCount = h.checks.filter((c) => c.status === 'bad' || c.status === 'warn').length)).catch(() => {});
       privacy.obs = (await invoke('show_status')).obs;
       applyPrivacy();
       un.push(await listen('obs-changed', (e) => { privacy.obs = !!e.payload; applyPrivacy(); }));
@@ -169,7 +175,7 @@
       <img src="/icon.png" alt="" />
       <div>
         <h1>Cartographer</h1>
-        <p>v0.4 · map, space, backups &amp; cleanup</p>
+        <p>v0.5 Â· map, space, backups, cleanup &amp; health</p>
       </div>
     </div>
 
@@ -189,14 +195,14 @@
           <div class="bar"><div style="width:{pct * 100}%" class:warn={pct > 0.9}></div></div>
           <div class="meta">
             {#if s}
-              {fmtBytes(used)} of {fmtBytes(d.total)} · scanned {fmtAgo(s.started)} in {(s.duration_ms / 1000).toFixed(1)} s{s.method === 'fast' ? ' ⚡' : ''}
+              {fmtBytes(used)} of {fmtBytes(d.total)} Â· scanned {fmtAgo(s.started)} in {(s.duration_ms / 1000).toFixed(1)} s{s.method === 'fast' ? ' âš¡' : ''}
             {:else}
-              {fmtBytes(used)} of {fmtBytes(d.total)} · not scanned yet
+              {fmtBytes(used)} of {fmtBytes(d.total)} Â· not scanned yet
             {/if}
           </div>
         </button>
         <button class="scanbtn" disabled={!!progress} onclick={() => scan(d.letter)} title="Scan {d.letter}:">
-          {s ? '↻' : 'Scan'}
+          {s ? 'â†»' : 'Scan'}
         </button>
       </div>
     {/each}
@@ -205,11 +211,11 @@
       <div class="progress">
         <div class="spinner"></div>
         <div>
-          <b>Scanning {progress.root}{phaseLabel(progress) ? ` · ${phaseLabel(progress)}` : ''}</b>
+          <b>Scanning {progress.root}{phaseLabel(progress) ? ` Â· ${phaseLabel(progress)}` : ''}</b>
           {#if progress.total_records && phaseLabel(progress) === 'reading index'}
-            <span>{Math.round((progress.records / progress.total_records) * 100)}% of {fmtCount(progress.total_records)} records · {progress.seconds?.toFixed(1)} s</span>
+            <span>{Math.round((progress.records / progress.total_records) * 100)}% of {fmtCount(progress.total_records)} records Â· {progress.seconds?.toFixed(1)} s</span>
           {:else}
-            <span>{fmtCount(progress.files)} files · {fmtBytes(progress.bytes)} · {progress.seconds?.toFixed(1)} s</span>
+            <span>{fmtCount(progress.files)} files Â· {fmtBytes(progress.bytes)} Â· {progress.seconds?.toFixed(1)} s</span>
           {/if}
         </div>
       </div>
@@ -219,10 +225,10 @@
     <div class="spacer"></div>
     <div class="fast" class:on={fast}>
       <div>
-        <b>⚡ Fast scan {fast ? 'on' : 'off'}</b>
+        <b>âš¡ Fast scan {fast ? 'on' : 'off'}</b>
         <span>{fast ? 'Reads the drive index directly. NTFS drives scan in seconds.' : 'Reads the drive index directly. Needs admin once (one Windows prompt).'}</span>
       </div>
-      <button disabled={fastBusy || !!progress} onclick={toggleFast}>{fastBusy ? '…' : fast ? 'Turn off' : 'Turn on'}</button>
+      <button disabled={fastBusy || !!progress} onclick={toggleFast}>{fastBusy ? 'â€¦' : fast ? 'Turn off' : 'Turn on'}</button>
     </div>
     {#if settings}
       <div class="opts">
@@ -234,7 +240,7 @@
             </select> min away</span>
         </label>
         <div class="subrow">
-          <button class="mini" onclick={previewShow}>▶ Preview</button>
+          <button class="mini" onclick={previewShow}>â–¶ Preview</button>
           <span>stops after
             <select bind:value={settings.show_minutes} onchange={saveSettings}>
               {#each [5, 10, 20, 30, 60] as m (m)}<option value={m}>{m}</option>{/each}
@@ -248,6 +254,13 @@
         <label class="toggle sub">
           <input type="checkbox" bind:checked={settings.privacy_with_obs} onchange={saveSettings} />
           <span>Turn on automatically when OBS is open</span>
+        </label>
+        <label class="toggle">
+          <input type="checkbox" bind:checked={settings.auto_refresh} onchange={saveSettings} />
+          <span>Auto-update the map every
+            <select bind:value={settings.refresh_minutes} onchange={saveSettings} disabled={!settings.auto_refresh}>
+              {#each [15, 30, 60, 120] as m (m)}<option value={m}>{m}</option>{/each}
+            </select> min</span>
         </label>
         <label class="toggle">
           <input type="checkbox" checked={autostart} onchange={toggleAutostart} />
@@ -265,23 +278,36 @@
         <button class:on={tab === 'space'} onclick={() => (tab = 'space')}>Space</button>
         <button class:on={tab === 'backups'} onclick={showBackups}>Backups</button>
         <button class:on={tab === 'cleanup'} onclick={() => (tab = 'cleanup')}>Cleanup</button>
+        <button class:on={tab === 'health'} onclick={() => (tab = 'health')}>Health{#if healthCount}<span class="badge">{healthCount}</span>{/if}</button>
       </div>
       {#if tab === 'space' && view}
         <nav>
           {#each view.crumbs as c, i (c.id)}
-            {#if i > 0}<span class="sep">›</span>{/if}
+            {#if i > 0}<span class="sep">â€º</span>{/if}
             <button class:cur={i === view.crumbs.length - 1} onclick={() => openDir(c.id)}><span class:pvt={privacy.on && i > 0}>{i > 0 ? pv(c.name) : c.name}</span></button>
           {/each}
         </nav>
-        <div class="tot">{fmtBytes(total)} · {fmtCount(view.node.files)} files</div>
+        <div class="tot">{fmtBytes(total)} Â· {fmtCount(view.node.files)} files</div>
       {:else}
         <nav></nav>
         {#if tab === 'map' && graphData}
-          <button class="rebuild" disabled={graphLoading} onclick={loadGraph}>{graphLoading ? 'Updating…' : '↻ Refresh map'}</button>
+          <button class="rebuild" disabled={graphLoading} onclick={loadGraph}>{graphLoading ? 'Updatingâ€¦' : 'â†» Refresh map'}</button>
         {/if}
       {/if}
     </header>
-    {#if tab === 'cleanup'}
+    {#if tab === 'health'}
+      <div class="body single">
+        <HealthView
+          oncount={(n) => (healthCount = n)}
+          onscan={(letter) => scan(letter)}
+          ongo={(where, target) => {
+            if (where === 'backups') showBackups();
+            else if (where === 'cleanup') tab = 'cleanup';
+            else if (where === 'space') { const s = scanFor(target); if (s) openDrive(s); }
+          }}
+        />
+      </div>
+    {:else if tab === 'cleanup'}
       <div class="body single">
         <CleanupView onspace={openSpace} onreveal={(p) => invoke('reveal', { path: p })} onchanged={() => { graphData = null; }} />
       </div>
@@ -291,7 +317,7 @@
           <BackupView report={backupData} onspace={openSpace} onreveal={(p) => invoke('reveal', { path: p })} />
         </div>
       {:else}
-        <div class="empty"><h2>Reading your backups…</h2></div>
+        <div class="empty"><h2>Reading your backupsâ€¦</h2></div>
       {/if}
     {:else if tab === 'map'}
       {#if graphData}
@@ -304,7 +330,7 @@
         <div class="empty">
           <img src="/icon.png" alt="" />
           {#if graphLoading}
-            <h2>Drawing your map…</h2>
+            <h2>Drawing your mapâ€¦</h2>
             <p>Reading drives, projects, games and apps.</p>
           {:else}
             <h2>Map your PC</h2>
@@ -336,7 +362,7 @@
                   <span class="pbar"><span style="width:{total ? (k.size / total) * 100 : 0}%"></span></span>
                 </button>
                 {#if k.path}
-                  <button class="rv" title="Show in Explorer" onclick={() => invoke('reveal', { path: k.path })}>↗</button>
+                  <button class="rv" title="Show in Explorer" onclick={() => invoke('reveal', { path: k.path })}>â†—</button>
                 {/if}
               </li>
             {/each}

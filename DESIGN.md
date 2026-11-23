@@ -290,3 +290,11 @@ Rust is a good fit for the scanner and file actions (speed + safety).
 | Show choreography | Alternates wide orbit and fly-bys to the biggest / most recently changed items, with a caption (name · size) |
 | Privacy mode | Done: names scrambled (deterministic random letters, same shape, drive letters kept) then blurred, in Map (2D/3D labels, hover, panel), Space, Backups, Cleanup and Show mode captions; optional auto-on while OBS is open |
 | Not yet | Multi-monitor choice, .scr screensaver, video-call detection |
+
+### v0.5 status (2026-11-23)
+| Item | State |
+|---|---|
+| Health dashboard | Done: Backups (freshness, connected, unprotected folders), Storage (free % / GB thresholds), Drives (Get-PhysicalDisk HealthStatus mapped to letters), Clutter (Recycle Bin, Temp, Desktop, old Downloads, unused items), Map (scan age, fast scan, auto-update). Actions jump to Backups / Cleanup / Space / rescan / open folder. Issue badge on the tab |
+| Live updates | Done, pragmatically: ReadDirectoryChangesW watchers (notify crate) on each NTFS drive mark it dirty (noise filtered); a background loop rescans one dirty drive at a time, at most every refresh_minutes, only after 60 s of no input. Tested: a new file in Documents triggered an automatic C: rescan after 81 s |
+| Not done | Reading the USN change journal for per-file incremental index updates (needs a permanently elevated helper); SMART temperature / wear (needs admin) |
+| Archive speed | Zipping and verification run on every CPU core (66.9 s -> 4.9 s on a 364 MB test) |

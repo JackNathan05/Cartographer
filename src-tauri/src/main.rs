@@ -5,10 +5,12 @@ mod backups;
 mod cleanup;
 mod drives;
 mod graph;
+mod health;
 mod helper;
 mod idle;
 mod mft;
 mod scan;
+mod watch;
 
 use rusqlite::Connection;
 use serde::Serialize;
@@ -80,16 +82,24 @@ fn is_scanning(state: State<AppState>) -> bool {
 }
 
 #[tauri::command(async)]
-fn start_scan(app: AppHandle, state: State<AppState>, root: String) -> Result<(), String> {
+fn start_scan(app: AppHandle, root: String) -> Result<(), String> {
+    begin_scan(&app, root)
+}
+
+/// Starts a background scan of `root` (used by the Scan button and by live updates).
+fn begin_scan(app: &AppHandle, root: String) -> Result<(), String> {
+    let state = app.state::<AppState>();
     if state.scanning.swap(true, Ordering::SeqCst) {
         return Err("A scan is already running".into());
     }
     let flag = state.scanning.clone();
     let db_path = state.db_path.clone();
+    let app = app.clone();
     std::thread::Builder::new()
         .name("scan".into())
         .stack_size(64 * 1024 * 1024)
         .spawn(move || {
+            let _ = app.emit("scan-started", root.clone());
             let result = match fast_scan(&app, &root) {
                 Some(r) => r,
                 None => run_scan(&app, &db_path, &root),
@@ -278,6 +288,12 @@ fn show_exit(app: AppHandle) {
     idle::close_show(&app);
 }
 
+#[tauri::command(async)]
+fn health_report(state: State<AppState>) -> Result<health::Report, String> {
+    let c = state.conn.lock().map_err(err)?;
+    health::report(&c).map_err(err)
+}
+
 /// The map's layout (forces, radiate/pull/push points, pinned and last positions).
 #[tauri::command(async)]
 fn load_layout() -> Option<serde_json::Value> {
@@ -441,6 +457,15 @@ fn main() {
             let _ = std::fs::write(out, cleanup::selftest(&dir));
             return;
         }
+        Some("--health-dump") => {
+            let out = args.get(2).cloned().unwrap_or_else(|| "health.json".into());
+            if let Ok(c) = db::open(&helper::data_dir().join("index.db")) {
+                if let Ok(r) = health::report(&c) {
+                    let _ = std::fs::write(out, serde_json::to_vec_pretty(&r).unwrap_or_default());
+                }
+            }
+            return;
+        }
         Some("--helper") => std::process::exit(helper::run()),
         Some("--install-helper") => std::process::exit(helper::install()),
         Some("--uninstall-helper") => std::process::exit(helper::uninstall()),
@@ -460,6 +485,7 @@ fn main() {
             let showing = Arc::new(AtomicBool::new(false));
             app.manage(AppState { db_path, conn: Mutex::new(conn), scanning: Arc::new(AtomicBool::new(false)), showing: showing.clone() });
             idle::start(app.handle().clone(), showing);
+            watch::start(app.handle().clone(), begin_scan);
 
             let open = MenuItem::with_id(app, "open", "Open Cartographer", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -487,7 +513,7 @@ fn main() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![drives, scans, view, graph, get_settings, set_settings, show_status, show_preview, show_exit, backup_report, cleanup_report, cleanup_hide, cleanup_unhide_all, cleanup_run, open_uninstall, load_layout, save_layout, reset_layout, is_scanning, start_scan, helper_status, set_fast_scan, reveal, open_path])
+        .invoke_handler(tauri::generate_handler![drives, scans, view, graph, health_report, get_settings, set_settings, show_status, show_preview, show_exit, backup_report, cleanup_report, cleanup_hide, cleanup_unhide_all, cleanup_run, open_uninstall, load_layout, save_layout, reset_layout, is_scanning, start_scan, helper_status, set_fast_scan, reveal, open_path])
         .build(tauri::generate_context!())
         .expect("error while building Cartographer");
 

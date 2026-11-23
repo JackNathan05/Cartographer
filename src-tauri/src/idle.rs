@@ -31,14 +31,19 @@ pub struct Settings {
     pub privacy: bool,
     #[serde(default = "yes")]
     pub privacy_with_obs: bool,
+    #[serde(default = "yes")]
+    pub auto_refresh: bool,
+    #[serde(default = "thirty")]
+    pub refresh_minutes: u32,
 }
+fn thirty() -> u32 { 30 }
 fn yes() -> bool { true }
 fn ten() -> u32 { 10 }
 fn twenty() -> u32 { 20 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { show_enabled: true, idle_minutes: 10, show_minutes: 20, privacy: false, privacy_with_obs: true }
+        Settings { show_enabled: true, idle_minutes: 10, show_minutes: 20, privacy: false, privacy_with_obs: true, auto_refresh: true, refresh_minutes: 30 }
     }
 }
 
