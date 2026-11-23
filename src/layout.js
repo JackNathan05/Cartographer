@@ -22,9 +22,11 @@ export const DEFAULTS = {
   core: 90, // how far from a radiate point the drives sit
   radiate: 0.12, // how strongly rings are kept
   gravity: 0.015, // gentle pull to the middle so nothing drifts away
+  straighten: 0, // pull each node's branches to line up across from its root branch (0 = off)
 };
 
 export const SLIDERS = [
+  { key: 'straighten', label: 'Straighten branches', min: 0, max: 1, step: 0.01 },
   { key: 'ring', label: 'Ring spacing', min: 20, max: 160, step: 1 },
   { key: 'radiate', label: 'Radiate strength', min: 0, max: 0.5, step: 0.01 },
   { key: 'core', label: 'Drive distance from center', min: 0, max: 300, step: 1 },
@@ -148,6 +150,50 @@ export function createLayout(data, layout, onTick) {
     }
   }
 
+  // straighten branches: for every node, its children are pulled toward the spot directly
+  // across from its root branch (the line back to its parent, or for a drive, to the nearest
+  // radiate point). The biggest child pulls hardest; each smaller one a bit less.
+  const kidsOf = new Map();
+  for (const l of links) {
+    const t = typeof l.target === 'object' ? l.target.id : l.target;
+    const sId = typeof l.source === 'object' ? l.source.id : l.source;
+    if (!kidsOf.has(t)) kidsOf.set(t, []);
+    kidsOf.get(t).push(sId);
+  }
+  for (const [k, list] of kidsOf) {
+    kidsOf.set(k, list.map((id) => byId.get(id)).filter(Boolean).sort((a, b) => b.size - a.size || a.id.localeCompare(b.id)));
+  }
+  function straighten(alpha) {
+    const k = s().straighten;
+    if (!k) return;
+    const radiators = layout.points.filter((p) => p.type === 'radiate');
+    for (const [pid, kids] of kidsOf) {
+      const n = byId.get(pid);
+      if (!n || !kids.length) continue;
+      // where the root branch comes from
+      let rx, ry;
+      const par = parentOf.get(pid);
+      if (par && byId.has(par)) { const pn = byId.get(par); rx = pn.x; ry = pn.y; }
+      else if (radiators.length) {
+        let best = radiators[0], bd = Infinity;
+        for (const p of radiators) { const d = (n.x - p.x) ** 2 + (n.y - p.y) ** 2; if (d < bd) { bd = d; best = p; } }
+        rx = best.x; ry = best.y;
+      } else continue;
+      let ux = n.x - rx, uy = n.y - ry;
+      const ul = Math.hypot(ux, uy);
+      if (ul < 0.01) continue;
+      ux /= ul; uy /= ul;
+      kids.forEach((c, i) => {
+        if (c.fx != null) return;
+        const dist = Math.hypot(c.x - n.x, c.y - n.y) || 1;
+        const tx = n.x + ux * dist, ty = n.y + uy * dist;
+        const w = Math.min(0.9, (k * k * alpha * 2.5) / (1 + i * 0.6)); // biggest child first, then descending
+        c.vx += (tx - c.x) * w;
+        c.vy += (ty - c.y) * w;
+      });
+    }
+  }
+
   // pull / push points with a reach (0 = everywhere)
   function points(alpha) {
     for (const p of layout.points) {
@@ -174,6 +220,7 @@ export function createLayout(data, layout, onTick) {
     .force('driveRepel', driveRepel)
     .force('radiate', radiate)
     .force('points', points)
+    .force('straighten', straighten)
     .force('gx', forceX(0))
     .force('gy', forceY(0))
     .alphaDecay(0.03)
