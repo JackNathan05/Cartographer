@@ -83,9 +83,18 @@
     return g;
   }
 
+  // "Radiate from 2": numbered within its type so points can be told apart
+  function pointName(p) {
+    const same = layout.points.filter((q) => q.type === p.type);
+    return `${POINT_TYPES[p.type].label} ${same.indexOf(p) + 1}`;
+  }
+  function relabelPoints() {
+    for (const p of layout.points) if (graph?.hasNode(`pt:${p.id}`)) graph.mergeNodeAttributes(`pt:${p.id}`, { label: pointName(p) });
+  }
+
   function addPointNode(g, p) {
     g.addNode(`pt:${p.id}`, {
-      label: POINT_TYPES[p.type].label, size: 10, color: POINT_TYPES[p.type].color, kind: 'point',
+      label: pointName(p), size: 10, color: POINT_TYPES[p.type].color, kind: 'point',
       forceLabel: true, x: p.x, y: p.y, zIndex: 3,
     });
   }
@@ -117,6 +126,7 @@
       settings: { ...DEFAULTS, ...(saved?.settings ?? {}) },
       points: saved?.points ?? base.points,
       pinned: saved?.pinned ?? {},
+      aim: saved?.aim ?? {},
       positions: saved?.positions ?? {},
     };
     pinnedCount = Object.keys(layout.pinned).length;
@@ -271,6 +281,7 @@
     const p = { id: Math.random().toString(36).slice(2, 8), type, x, y, strength: 1, reach: type === 'radiate' ? 0 : 300 };
     layout.points.push(p);
     addPointNode(graph, p);
+    relabelPoints();
     selectedPoint = p.id;
     changed(0.7);
   }
@@ -278,14 +289,23 @@
   function removePoint(id) {
     layout.points = layout.points.filter((p) => p.id !== id);
     if (graph.hasNode(`pt:${id}`)) graph.dropNode(`pt:${id}`);
+    for (const [n, pid] of Object.entries(layout.aim)) if (pid === id) delete layout.aim[n];
+    relabelPoints();
     if (selectedPoint === id) selectedPoint = null;
     changed(0.7);
   }
 
   function setPointType(p, type) {
     p.type = type;
-    graph.mergeNodeAttributes(`pt:${p.id}`, { label: POINT_TYPES[type].label, color: POINT_TYPES[type].color });
+    graph.mergeNodeAttributes(`pt:${p.id}`, { color: POINT_TYPES[type].color });
+    relabelPoints();
     if (type !== 'radiate' && !p.reach) p.reach = 300;
+    changed(0.6);
+  }
+
+  function setAim(nodeId, pointId) {
+    if (pointId) layout.aim[nodeId] = pointId;
+    else delete layout.aim[nodeId];
     changed(0.6);
   }
 
@@ -504,11 +524,31 @@
     </div>
     {#if savedNote}<div class="note">{savedNote}</div>{/if}
 
+    {#if sel}
+      <h3>Selected dot</h3>
+      <div class="pt sel">
+        <div class="pthead"><span class="dot" style="background:{colorOf(sel)}"></span><b class="selname">{sel.label}</b></div>
+        <label>Straighten its branches away from
+          <select value={layout.aim[sel.id] ?? ''} onchange={(e) => setAim(sel.id, e.currentTarget.value)}>
+            <option value="">{sel.kind === 'drive' ? 'Nearest radiate point' : 'Its parent (default)'}</option>
+            {#each layout.points as p (p.id)}<option value={p.id}>{pointName(p)}</option>{/each}
+          </select>
+        </label>
+        <div class="row">
+          {#if layout.pinned[sel.id]}<button onclick={unpinSelected}>📌 Unpin</button>{/if}
+          <button onclick={() => (selected = null)}>Deselect</button>
+        </div>
+      </div>
+    {:else}
+      <p class="muted small">Click a dot to choose which point its branches straighten away from.</p>
+    {/if}
+
     <h3>Points</h3>
     {#each layout.points as p (p.id)}
       <div class="pt" class:sel={selectedPoint === p.id}>
         <div class="pthead">
           <span class="dot" style="background:{POINT_TYPES[p.type].color}"></span>
+          <b class="ptname">{pointName(p)}</b>
           <select value={p.type} onchange={(e) => setPointType(p, e.currentTarget.value)}>
             {#each Object.entries(POINT_TYPES) as [k, v] (k)}<option value={k}>{v.label}</option>{/each}
           </select>
@@ -659,4 +699,8 @@
   label { display: block; font-size: 12px; color: #b8c4d6; margin: 6px 0 2px; }
   label span { float: right; color: var(--muted); }
   label input[type='range'] { width: 100%; accent-color: #2dd4bf; margin: 3px 0 0; }
+  label select { display: block; width: 100%; margin-top: 4px; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 6px; font: inherit; font-size: 12.5px; }
+  .selname { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ptname { font-size: 12.5px; white-space: nowrap; }
+  .pthead select { flex: 0 1 auto; min-width: 0; }
 </style>

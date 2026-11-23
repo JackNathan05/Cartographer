@@ -23,9 +23,11 @@ export const DEFAULTS = {
   radiate: 0.12, // how strongly rings are kept
   gravity: 0.015, // gentle pull to the middle so nothing drifts away
   straighten: 0, // pull each node's branches to line up across from its root branch (0 = off)
+  untangle: 0.6, // keep branches from crossing, and dots off other branches' lines
 };
 
 export const SLIDERS = [
+  { key: 'untangle', label: 'Untangle branches (no overlaps)', min: 0, max: 1, step: 0.01 },
   { key: 'straighten', label: 'Straighten branches', min: 0, max: 1, step: 0.01 },
   { key: 'ring', label: 'Ring spacing', min: 20, max: 160, step: 1 },
   { key: 'radiate', label: 'Radiate strength', min: 0, max: 0.5, step: 0.01 },
@@ -50,6 +52,7 @@ export function defaultLayout() {
     settings: { ...DEFAULTS },
     points: [{ id: 'center', type: 'radiate', x: 0, y: 0, strength: 1, reach: 0 }],
     pinned: {}, // node id -> [x, y]
+    aim: {}, // node id -> point id its branches straighten away from (instead of its parent)
     positions: {}, // node id -> [x, y] (last saved, used as the starting point)
   };
 }
@@ -170,10 +173,13 @@ export function createLayout(data, layout, onTick) {
     for (const [pid, kids] of kidsOf) {
       const n = byId.get(pid);
       if (!n || !kids.length) continue;
-      // where the root branch comes from
+      // where the root branch comes from: a point the user picked, else the parent,
+      // else (drives) the nearest radiate point
       let rx, ry;
       const par = parentOf.get(pid);
-      if (par && byId.has(par)) { const pn = byId.get(par); rx = pn.x; ry = pn.y; }
+      const aimed = layout.aim?.[pid] && layout.points.find((p) => p.id === layout.aim[pid]);
+      if (aimed) { rx = aimed.x; ry = aimed.y; }
+      else if (par && byId.has(par)) { const pn = byId.get(par); rx = pn.x; ry = pn.y; }
       else if (radiators.length) {
         let best = radiators[0], bd = Infinity;
         for (const p of radiators) { const d = (n.x - p.x) ** 2 + (n.y - p.y) ** 2; if (d < bd) { bd = d; best = p; } }
@@ -191,6 +197,58 @@ export function createLayout(data, layout, onTick) {
         c.vx += (tx - c.x) * w;
         c.vy += (ty - c.y) * w;
       });
+    }
+  }
+
+  // untangle: (1) two branch lines that cross push each other apart, (2) a dot sitting on
+  // (or very near) a line from another branch is pushed off it. Pinned dots don't move.
+  const segs = () => links.map((l) => [l.source, l.target]).filter(([a, b]) => typeof a === 'object' && typeof b === 'object');
+  const cross = (a, b, c, d) => {
+    const o = (p, q, r) => (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+    const d1 = o(c, d, a), d2 = o(c, d, b), d3 = o(a, b, c), d4 = o(a, b, d);
+    return d1 * d2 < 0 && d3 * d4 < 0;
+  };
+  const nudge = (n, x, y) => { if (n.fx == null) { n.vx += x; n.vy += y; } };
+  function untangle(alpha) {
+    const k = s().untangle;
+    if (!k) return;
+    const S = segs();
+    // 1. crossing branches
+    for (let i = 0; i < S.length; i++) {
+      const [a, b] = S[i];
+      for (let j = i + 1; j < S.length; j++) {
+        const [c, d] = S[j];
+        if (a === c || a === d || b === c || b === d) continue;
+        if (!cross(a, b, c, d)) continue;
+        let dx = (a.x + b.x - c.x - d.x) / 2, dy = (a.y + b.y - c.y - d.y) / 2;
+        let len = Math.hypot(dx, dy);
+        if (len < 0.01) { dx = 1; dy = 0; len = 1; }
+        const f = (k * alpha * 4) / len;
+        // the child ends move most; parents move a little
+        nudge(a, dx * f, dy * f); nudge(b, dx * f * 0.3, dy * f * 0.3);
+        nudge(c, -dx * f, -dy * f); nudge(d, -dx * f * 0.3, -dy * f * 0.3);
+      }
+    }
+    // 2. dots on other branches' lines
+    for (const n of nodes) {
+      const r = 10 + Math.min(18, Math.sqrt(Math.max(n.size, 0) / 1073741824) * 2.2);
+      for (const [a, b] of S) {
+        if (n === a || n === b) continue;
+        const ex = b.x - a.x, ey = b.y - a.y;
+        const L2 = ex * ex + ey * ey || 1;
+        const t = Math.max(0, Math.min(1, ((n.x - a.x) * ex + (n.y - a.y) * ey) / L2));
+        if (t <= 0.02 || t >= 0.98) continue;
+        const px = a.x + ex * t, py = a.y + ey * t;
+        let dx = n.x - px, dy = n.y - py;
+        const dist = Math.hypot(dx, dy);
+        if (dist >= r) continue;
+        if (dist < 0.01) { dx = -ey; dy = ex; } // exactly on the line: push sideways
+        const m = Math.hypot(dx, dy) || 1;
+        const f = (k * alpha * (r - dist) * 0.8) / m;
+        nudge(n, dx * f, dy * f);
+        nudge(a, -dx * f * 0.25, -dy * f * 0.25);
+        nudge(b, -dx * f * 0.25, -dy * f * 0.25);
+      }
     }
   }
 
@@ -221,6 +279,7 @@ export function createLayout(data, layout, onTick) {
     .force('radiate', radiate)
     .force('points', points)
     .force('straighten', straighten)
+    .force('untangle', untangle)
     .force('gx', forceX(0))
     .force('gy', forceY(0))
     .alphaDecay(0.03)
