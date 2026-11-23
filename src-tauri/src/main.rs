@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod ask;
+mod ask_tools;
 mod db;
 mod backups;
 mod cleanup;
@@ -12,6 +14,7 @@ mod idle;
 mod mft;
 mod projects;
 mod scan;
+mod screensaver;
 mod watch;
 
 use rusqlite::Connection;
@@ -30,6 +33,7 @@ struct AppState {
     conn: Mutex<Connection>,
     scanning: Arc<AtomicBool>,
     showing: Arc<AtomicBool>,
+    convo: Mutex<ask::Conversation>,
 }
 
 #[derive(Serialize, Clone)]
@@ -332,6 +336,47 @@ fn open_url(url: String) -> Result<(), String> {
     std::process::Command::new("explorer").raw_arg(format!("\"{}\"", url)).spawn().map(|_| ()).map_err(err)
 }
 
+#[tauri::command(async)]
+fn screensaver_status() -> bool {
+    screensaver::installed()
+}
+
+/// Opens Windows' Screen Saver Settings with Cartographer selected (you press OK there).
+#[tauri::command(async)]
+fn screensaver_install() -> Result<String, String> {
+    screensaver::install()
+}
+
+#[tauri::command(async)]
+fn ask_status() -> ask::Status {
+    ask::status()
+}
+
+/// Stores (or with an empty string, removes) the Anthropic API key, encrypted for this Windows user.
+#[tauri::command(async)]
+fn ask_set_key(key: String) -> Result<ask::Status, String> {
+    ask::save_key(&key)?;
+    Ok(ask::status())
+}
+
+#[tauri::command(async)]
+fn ask_new(state: State<AppState>) {
+    if let Ok(mut c) = state.convo.lock() {
+        *c = ask::Conversation::default();
+    }
+}
+
+#[tauri::command(async)]
+fn ask_question(app: AppHandle, state: State<AppState>, question: String) -> Result<ask::Answer, String> {
+    let s = idle::load();
+    if !s.ask_ok {
+        return Err("Turn on Ask Claude first.".into());
+    }
+    let mut convo = state.convo.try_lock().map_err(|_| "Claude is still answering the last question.".to_string())?;
+    let emit = |st: &ask::Step| { let _ = app.emit("ask-step", st.clone()); };
+    ask::ask(&state.db_path, &mut convo, &question, &s.ask_backend, &emit)
+}
+
 /// The map's layout (forces, radiate/pull/push points, pinned and last positions).
 #[tauri::command(async)]
 fn load_layout() -> Option<serde_json::Value> {
@@ -438,6 +483,17 @@ fn bench(args: &[String]) {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    // Started by Windows as Cartographer.scr
+    match screensaver::mode(args.get(1).map(|s| s.as_str())) {
+        Some(screensaver::Mode::Preview) => return, // no tiny preview
+        Some(screensaver::Mode::Show) => {
+            if screensaver::hand_off() {
+                return; // the running Cartographer showed it
+            }
+            screensaver::ONLY.store(true, Ordering::SeqCst); // nothing running: be the screensaver ourselves
+        }
+        Some(screensaver::Mode::Configure) | None => {}
+    }
     match args.get(1).map(|s| s.as_str()) {
         Some("--bench") | Some("--bench-fast") => { bench(&args); return; }
         Some("--graph-dump") => {
@@ -495,6 +551,31 @@ fn main() {
             let _ = std::fs::write(out, cleanup::selftest(&dir));
             return;
         }
+        Some("--mcp") => std::process::exit(ask::mcp_server()),
+        Some("--ask") => {
+            // testing: `--ask "question" out.json [auto|claude_code|api]`
+            let q = args.get(2).cloned().unwrap_or_default();
+            let out = args.get(3).cloned().unwrap_or_else(|| "ask.json".into());
+            let backend = args.get(4).cloned().unwrap_or_else(|| "auto".into());
+            let mut convo = ask::Conversation::default();
+            let steps = std::sync::Mutex::new(Vec::new());
+            let r = ask::ask(&helper::data_dir().join("index.db"), &mut convo, &q, &backend, &|s: &ask::Step| steps.lock().unwrap().push(s.tool.clone()));
+            let v = match r { Ok(a) => serde_json::to_value(&a).unwrap_or_default(), Err(e) => serde_json::json!({ "error": e }) };
+            let _ = std::fs::write(out, serde_json::to_vec_pretty(&v).unwrap_or_default());
+            return;
+        }
+        Some("--tool") => {
+            // testing: `--tool name '{json}' out.json`
+            let name = args.get(2).cloned().unwrap_or_default();
+            let input: serde_json::Value = serde_json::from_str(args.get(3).map(|s| s.as_str()).unwrap_or("{}")).unwrap_or_default();
+            let out = args.get(4).cloned().unwrap_or_else(|| "tool.json".into());
+            if let Ok(mut c) = db::open(&helper::data_dir().join("index.db")) {
+                let t = Instant::now();
+                let v = match ask_tools::run(&mut c, &name, &input) { Ok(v) => v, Err(e) => serde_json::json!({ "error": e }) };
+                let _ = std::fs::write(out, serde_json::to_vec_pretty(&serde_json::json!({ "ms": t.elapsed().as_millis() as u64, "bytes": v.to_string().len(), "result": v })).unwrap_or_default());
+            }
+            return;
+        }
         Some("--timeline-dump") => {
             // `--timeline-dump out.json <days> [db]`: testing; pass a copy of the index as db
             let out = args.get(2).cloned().unwrap_or_else(|| "timeline.json".into());
@@ -544,7 +625,14 @@ fn main() {
         _ => {}
     }
     let app = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // a late screensaver start shows the 3D map, not the main window
+            if matches!(screensaver::mode(args.get(1).map(|s| s.as_str())), Some(screensaver::Mode::Show)) {
+                idle::open_show(app);
+            } else {
+                show_main(app);
+            }
+        }))
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--hidden"]),
@@ -555,7 +643,7 @@ fn main() {
             let db_path = dir.join("index.db");
             let conn = db::open(&db_path)?;
             let showing = Arc::new(AtomicBool::new(false));
-            app.manage(AppState { db_path, conn: Mutex::new(conn), scanning: Arc::new(AtomicBool::new(false)), showing: showing.clone() });
+            app.manage(AppState { db_path, conn: Mutex::new(conn), scanning: Arc::new(AtomicBool::new(false)), showing: showing.clone(), convo: Mutex::new(ask::Conversation::default()) });
             idle::start(app.handle().clone(), showing);
             watch::start(app.handle().clone(), begin_scan);
             {
@@ -588,12 +676,14 @@ fn main() {
                 })
                 .build(app)?;
 
-            if !std::env::args().any(|a| a == "--hidden") {
+            if screensaver::only() {
+                screensaver::request_now(); // the idle loop opens Show mode and quits when it closes
+            } else if !std::env::args().any(|a| a == "--hidden") {
                 show_main(app.handle());
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![drives, scans, view, graph, health_report, get_settings, set_settings, show_status, show_preview, show_exit, backup_report, cleanup_report, cleanup_hide, cleanup_unhide_all, cleanup_run, open_uninstall, load_layout, save_layout, reset_layout, is_scanning, start_scan, helper_status, set_fast_scan, reveal, open_path, timeline, projects_report, open_in_editor, open_terminal, open_url])
+        .invoke_handler(tauri::generate_handler![drives, scans, view, graph, health_report, get_settings, set_settings, show_status, show_preview, show_exit, backup_report, cleanup_report, cleanup_hide, cleanup_unhide_all, cleanup_run, open_uninstall, load_layout, save_layout, reset_layout, is_scanning, start_scan, helper_status, set_fast_scan, reveal, open_path, timeline, projects_report, open_in_editor, open_terminal, open_url, ask_status, ask_set_key, ask_new, ask_question, screensaver_status, screensaver_install])
         .build(tauri::generate_context!())
         .expect("error while building Cartographer");
 

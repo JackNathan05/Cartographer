@@ -10,6 +10,7 @@
   import HealthView from './HealthView.svelte';
   import TimelineView from './TimelineView.svelte';
   import ProjectsView from './ProjectsView.svelte';
+  import AskView from './AskView.svelte';
   import { fmtBytes, fmtCount, fmtAgo, fmtDate } from './format.js';
   import { privacy, pv } from './privacy.svelte.js';
 
@@ -29,6 +30,7 @@
   let settings = $state(null); // show mode + privacy (settings.json)
   let showNote = $state('');
   let healthCount = $state(0);
+  let scrOn = $state(false); // Windows uses Cartographer.scr as its screensaver
   let bgScan = $state(false); // a live-update rescan is running
 
   const scanFor = (letter) => scans.find((s) => s.root.toUpperCase().startsWith(letter + ':'));
@@ -129,6 +131,15 @@
     applyPrivacy();
   }
 
+  async function installScr() {
+    error = '';
+    try {
+      await invoke('screensaver_install');
+      showNote = 'Windows Screen Saver Settings is open with Cartographer selected: pick the wait time and press OK. You can then turn off "Show mode after" above so only Windows starts it.';
+      setTimeout(async () => { scrOn = await invoke('screensaver_status'); }, 15000);
+    } catch (e) { error = String(e); }
+  }
+
   async function previewShow() {
     const st = await invoke('show_status');
     showNote = st.blocked ? `Note: it won't start by itself right now (${st.blocked}).` : '';
@@ -158,6 +169,7 @@
       }));
       un.push(await listen('scan-error', (e) => { progress = null; error = String(e.payload); }));
       settings = await invoke('get_settings');
+      invoke('screensaver_status').then((v) => (scrOn = v)).catch(() => {});
       invoke('health_report').then((h) => (healthCount = h.checks.filter((c) => c.status === 'bad' || c.status === 'warn').length)).catch(() => {});
       privacy.obs = (await invoke('show_status')).obs;
       applyPrivacy();
@@ -177,7 +189,7 @@
       <img src="/icon.png" alt="" />
       <div>
         <h1>Cartographer</h1>
-        <p>v0.6 · map, projects, timeline &amp; more</p>
+        <p>v0.7 · map, projects, ask Claude &amp; more</p>
       </div>
     </div>
 
@@ -249,6 +261,14 @@
             </select> min</span>
         </div>
         {#if showNote}<p class="hint">{showNote}</p>{/if}
+        <div class="subrow">
+          {#if scrOn}
+            <span class="okline">✓ Also your Windows screensaver</span>
+            <button class="mini" onclick={installScr}>Settings</button>
+          {:else}
+            <button class="mini" onclick={installScr} title="Opens Windows' Screen Saver Settings with Cartographer selected">Use as Windows screensaver…</button>
+          {/if}
+        </div>
         <label class="toggle">
           <input type="checkbox" bind:checked={settings.privacy} onchange={saveSettings} />
           <span>Privacy mode {privacy.on && !settings.privacy ? '(on: OBS is open)' : ''}</span>
@@ -282,6 +302,7 @@
         <button class:on={tab === 'cleanup'} onclick={() => (tab = 'cleanup')}>Cleanup</button>
         <button class:on={tab === 'projects'} onclick={() => (tab = 'projects')}>Projects</button>
         <button class:on={tab === 'timeline'} onclick={() => (tab = 'timeline')}>Timeline</button>
+        <button class:on={tab === 'ask'} onclick={() => (tab = 'ask')}>✦ Ask</button>
         <button class:on={tab === 'health'} onclick={() => (tab = 'health')}>Health{#if healthCount}<span class="badge">{healthCount}</span>{/if}</button>
       </div>
       {#if tab === 'space' && view}
@@ -299,7 +320,15 @@
         {/if}
       {/if}
     </header>
-    {#if tab === 'projects'}
+    {#if tab === 'ask'}
+      <div class="body single">
+        <AskView
+          {settings}
+          onenable={() => { settings.ask_ok = true; saveSettings(); }}
+          onbackend={(b) => { settings.ask_backend = b; saveSettings(); }}
+        />
+      </div>
+    {:else if tab === 'projects'}
       <div class="body single">
         <ProjectsView onspace={openSpace} />
       </div>

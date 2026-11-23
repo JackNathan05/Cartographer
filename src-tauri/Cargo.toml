@@ -1,6 +1,6 @@
 [package]
 name = "cartographer"
-version = "0.6.0"
+version = "0.7.0"
 description = "A living map of your PC"
 edition = "2021"
 license = "MIT"
@@ -16,12 +16,13 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 rayon = "1"
+ureq = "2"
 winreg = "0.52"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 walkdir = "2"
 notify = { version = "6", default-features = false }
 trash = "5"
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Power", "Win32_System_SystemInformation", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Power", "Win32_System_SystemInformation", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell"] }
 
 [profile.release]
 opt-level = 3

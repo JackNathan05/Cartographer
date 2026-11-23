@@ -6,10 +6,10 @@
 ---
 
 Cartographer is a lightweight Windows desktop app (Tauri + Rust + Svelte) that maps your drives,
-folders, projects and apps — and, in later versions, suggests what to archive and drifts into a
-cinematic 3D "show mode" when you step away. See [DESIGN.md](DESIGN.md) for the full plan.
+folders, projects, games, apps and backups, suggests what to archive, answers questions about your PC with Claude,
+and drifts into a cinematic 3D "show mode" when you step away. See [DESIGN.md](DESIGN.md) for the full design.
 
-## Status: v0.6 (project cards, timeline)
+## Status: v0.7 (Ask Claude, Windows screensaver, installer)
 
 - **Fast scan:** reads the NTFS Master File Table directly (C: with 1.76M files in ~10 s) through a small elevated helper; falls back to a parallel folder walk
 - **Map:** a force-directed graph of drives, folders, projects (git repos and `Projects` folders),
@@ -32,6 +32,13 @@ cinematic 3D "show mode" when you step away. See [DESIGN.md](DESIGN.md) for the 
   each drive's scan is, and folders that aren't backed up. Each issue links to where you fix it; the tab shows a badge
 - **Live updates:** every NTFS drive is watched for changes (noise like Temp, caches, Windows and the Recycle Bin is
   ignored); a changed drive is rescanned in the background at most every 30 min, only after a minute of no input
+- **Ask Claude:** ask about your PC in plain English ("what can I delete to free 50 GB?", "which projects aren't
+  pushed?"). Claude looks things up with read-only tools over Cartographer's index: names, paths, sizes and dates,
+  **never file contents**, and it can't change anything. Every answer lists what it looked at. Connects through your
+  installed **Claude Code** login (Cartographer runs itself as a local MCP server, all of Claude Code's own tools off)
+  or an **Anthropic API key** (stored encrypted with Windows DPAPI). Off until you turn it on
+- **Windows screensaver:** Show mode can also be your real Windows screensaver (`Cartographer.scr`), started by
+  Windows' own timer
 - **Projects:** a card for every project: what it's built with (Rust, Svelte, Python, Docker...), the first line of
   its README, size, last edit, git branch / uncommitted changes / unpushed commits / last commit, and which backups
   cover it. Open it in VS Code, Explorer, a terminal or on GitHub in one click. Filter to the ones that need a look
@@ -53,8 +60,17 @@ Requirements: Windows 10/11, [Rust](https://rustup.rs), Node 20+, Visual Studio 
 ```powershell
 npm install
 npm run tauri dev      # run with hot reload
-npm run tauri build    # installer in src-tauri/target/release/bundle
+npm run tauri build    # installer in src-tauri/target/release/bundle/nsis
 ```
+
+The installer is per-user (no admin). Uninstalling also removes "Start with Windows" and, with one Windows prompt,
+the fast-scan helper. Your index and settings in `%LOCALAPPDATA%\app.cartographer.desktop` are kept unless you tick
+the option to delete app data.
+
+### Ask Claude
+
+Either install [Claude Code](https://claude.com/claude-code) and log in once (`claude` in a terminal), or paste an
+Anthropic API key in the Ask tab's settings. Model: `claude-opus-5-5` (API) or whatever your Claude Code uses.
 
 The index lives in `%LOCALAPPDATA%\app.cartographer.desktop\index.db`.
 
@@ -82,7 +98,8 @@ Anything inside a source counts as backed up; projects outside every backup show
 | v0.4 | 3D view, Show mode, Privacy mode |
 | v0.5 | Health dashboard, live updates from the NTFS change journal |
 | v0.6 | Project cards, Timeline |
-| v0.7+ | Ask Claude, NAS / other machines, `.scr` screensaver, installer / open-source release |
+| v0.7 | Ask Claude, Windows screensaver, installer |
+| Later | NAS / other machines |
 
 ## License
 

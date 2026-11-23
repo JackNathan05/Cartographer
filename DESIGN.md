@@ -214,7 +214,8 @@ Rust is a good fit for the scanner and file actions (speed + safety).
 | **v0.4** | **3D view + Show mode** + **Privacy mode**. |
 | **v0.5** | Health dashboard (replaces monthly report). Change-journal live updates. |
 | **v0.6** | **Project cards + Timeline.** |
-| **v0.7+** | Ask Claude, NAS / other machines, `.scr` screensaver, open-source release. |
+| **v0.7** | **Ask Claude, `.scr` screensaver, installer.** |
+| **Later** | NAS / other machines (once the NAS is set up). |
 
 *(Show mode could move earlier if we want something to show off sooner.)*
 
@@ -308,3 +309,11 @@ Rust is a good fit for the scanner and file actions (speed + safety).
 | Faster | Path lookups walk down from the drive root by folder name (parent index) instead of reading all 400k folders: Map build 4.4 s -> ~0.9 s; drive list cached for 5 s |
 | Fixed | v0.5 garbled the sidebar's special characters (UTF-8 read as cp1252); restored |
 | Next | Ask Claude, NAS / other machines, `.scr` screensaver, installer |
+
+### v0.7 status (2026-11-23)
+| Item | State |
+|---|---|
+| Ask Claude | Done (ask.rs, ask_tools.rs, AskView.svelte). 9 read-only tools over the index: overview, find, folder, health, projects, apps_and_games, cleanup_suggestions, backups, changes. Metadata only, never file contents; no write tools. Two backends: **Claude Code** (`claude -p --tools "" --strict-mcp-config --mcp-config <cartographer --mcp> --allowedTools mcp__cartographer`, so its own file / shell tools are off) and the **Anthropic API** (raw HTTP via ureq, `claude-opus-5-5`, adaptive thinking, effort medium, server-side refusal fallback, manual tool loop, append-only history). API key encrypted with DPAPI. Opt-in card explains what is sent; each answer lists the tools used; paths in answers are clickable |
+| Screensaver | Done (screensaver.rs): `Cartographer.scr` (a copy of the exe) handles /s /p /c. /s hands off to the running tray app via a request file and waits while Show mode is up; if nothing is running it becomes the screensaver itself and quits after. Sidebar button opens Windows' Screen Saver Settings with it selected (`desk.cpl,InstallScreenSaver`); the user confirms there |
+| Installer | Configured: NSIS, per-user, license page, uninstall hook removes the Run key and (UAC) the fast-scan helper |
+| Later | NAS / other machines |

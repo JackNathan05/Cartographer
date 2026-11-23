@@ -35,7 +35,14 @@ pub struct Settings {
     pub auto_refresh: bool,
     #[serde(default = "thirty")]
     pub refresh_minutes: u32,
+    /// Ask Claude: the user agreed to send index metadata to Claude
+    #[serde(default)]
+    pub ask_ok: bool,
+    /// "auto" (Claude Code when installed, else API key) | "claude_code" | "api"
+    #[serde(default = "auto")]
+    pub ask_backend: String,
 }
+fn auto() -> String { "auto".into() }
 fn thirty() -> u32 { 30 }
 fn yes() -> bool { true }
 fn ten() -> u32 { 10 }
@@ -43,7 +50,7 @@ fn twenty() -> u32 { 20 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { show_enabled: true, idle_minutes: 10, show_minutes: 20, privacy: false, privacy_with_obs: true, auto_refresh: true, refresh_minutes: 30 }
+        Settings { show_enabled: true, idle_minutes: 10, show_minutes: 20, privacy: false, privacy_with_obs: true, auto_refresh: true, refresh_minutes: 30, ask_ok: false, ask_backend: auto() }
     }
 }
 
@@ -162,6 +169,20 @@ pub fn start(app: AppHandle, showing: Arc<AtomicBool>) {
                 let _ = app.emit("obs-changed", obs);
             }
 
+            // Windows started Cartographer.scr: show now, whatever the idle setting says
+            if crate::screensaver::take_request() {
+                crate::screensaver::set_active(true);
+                if shown_at.is_some() {
+                    continue; // already showing (our own idle timer): the .scr waits until it closes
+                }
+                open_show(&app);
+                shown_at = Some(Instant::now());
+                idle_at_open = idle;
+                showing.store(true, Ordering::SeqCst);
+                wait_for_input = false;
+                continue;
+            }
+
             if let Some(t) = shown_at {
                 let window_gone = app.get_webview_window("show").is_none();
                 let input = idle < idle_at_open.saturating_sub(1) || idle < 2;
@@ -171,6 +192,10 @@ pub fn start(app: AppHandle, showing: Arc<AtomicBool>) {
                     shown_at = None;
                     showing.store(false, Ordering::SeqCst);
                     wait_for_input = timed_out && !input;
+                    crate::screensaver::set_active(false);
+                    if crate::screensaver::only() {
+                        app.exit(0); // started only as the screensaver
+                    }
                 }
                 continue;
             }
