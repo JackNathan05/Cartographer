@@ -1,5 +1,6 @@
 <script>
   import { fmtBytes, fmtAgo, fmtDate } from './format.js';
+  import { privacy, pv } from './privacy.svelte.js';
 
   let { report, onspace, onreveal } = $props();
 
@@ -131,7 +132,7 @@
               {d.connected ? (d.target_exists ? f.label : 'Folder missing') : 'Not connected'}
             </span>
           </div>
-          <div class="where">{d.drive}: {d.drive_label} · <span class="path">{d.target}</span></div>
+          <div class="where">{d.drive}: {d.drive_label} · <span class="path" class:pvt={privacy.on}>{pv(d.target)}</span></div>
           <div class="stats">
             <div><span>Last activity</span><b>{d.last_activity ? fmtAgo(d.last_activity) : '—'}</b><em>{d.last_activity ? fmtDate(d.last_activity) : ''}</em></div>
             <div><span>Backs up</span><b>{d.sources.length} folder{d.sources.length === 1 ? '' : 's'}</b><em>{fmtBytes(srcTotal)} on your PC</em></div>
@@ -160,8 +161,8 @@
           <g class="src" role="presentation" onmouseenter={() => (hoverSrc = s.path)} onmouseleave={() => (hoverSrc = null)}
              onclick={() => s.scan_id && onspace?.(s.scan_id, s.dir_id)}>
             <rect x={flow.x0 - 8} y={s.y} width="8" height={s.h} rx="2" fill="#cbd5e1" />
-            <text x={flow.x0 - 16} y={s.y + Math.max(s.h, 14) / 2 - 2} text-anchor="end" class="lbl">{s.label}<tspan class="sz" dx="6">{fmtBytes(s.size)}</tspan></text>
-            <text x={flow.x0 - 16} y={s.y + Math.max(s.h, 14) / 2 + 12} text-anchor="end" class="sub">{s.path}</text>
+            <text x={flow.x0 - 16} y={s.y + Math.max(s.h, 14) / 2 - 2} text-anchor="end" class="lbl" class:pvt={privacy.on}>{pv(s.label)}<tspan class="sz" dx="6">{fmtBytes(s.size)}</tspan></text>
+            <text x={flow.x0 - 16} y={s.y + Math.max(s.h, 14) / 2 + 12} text-anchor="end" class="sub" class:pvt={privacy.on}>{pv(s.path)}</text>
           </g>
         {/each}
         {#each flow.right as d (d.name)}
@@ -215,7 +216,7 @@
           <li>
             <button onclick={() => f.scan_id && onspace?.(f.scan_id, f.dir_id)}>
               <span class="dot" style="background:{replaceable ? '#475569' : '#f87171'}"></span>
-              <span class="nm">{f.label}<small>{f.path}</small></span>
+              <span class="nm" class:pvt={privacy.on}>{pv(f.label)}<small>{pv(f.path)}</small></span>
               {#if f.hint}<span class="chip" class:soft={replaceable}>{f.hint}</span>{/if}
               <span class="sz">{fmtBytes(f.size)}</span>
             </button>
@@ -233,7 +234,7 @@
           <li>
             <button onclick={() => f.scan_id && onspace?.(f.scan_id, f.dir_id)}>
               <span class="dot" style="background:#22c55e"></span>
-              <span class="nm">{f.label}<small>{f.path}</small></span>
+              <span class="nm" class:pvt={privacy.on}>{pv(f.label)}<small>{pv(f.path)}</small></span>
               {#each f.backups as b (b)}<span class="chip tag" style="--c:{destColor(nameIndex.get(b) ?? 0)}">{b}</span>{/each}
               <span class="sz">{fmtBytes(f.size)}</span>
             </button>

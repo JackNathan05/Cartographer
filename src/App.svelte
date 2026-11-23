@@ -8,6 +8,7 @@
   import BackupView from './BackupView.svelte';
   import CleanupView from './CleanupView.svelte';
   import { fmtBytes, fmtCount, fmtAgo, fmtDate } from './format.js';
+  import { privacy, pv } from './privacy.svelte.js';
 
   let drives = $state([]);
   let scans = $state([]);
@@ -22,6 +23,8 @@
   let graphData = $state(null);
   let graphLoading = $state(false);
   let backupData = $state(null);
+  let settings = $state(null); // show mode + privacy (settings.json)
+  let showNote = $state('');
 
   const scanFor = (letter) => scans.find((s) => s.root.toUpperCase().startsWith(letter + ':'));
   const kids = $derived(view?.node?.children ?? []);
@@ -112,6 +115,21 @@
     if (e.key === 'Backspace' || e.key === 'Escape') up();
   }
 
+  function applyPrivacy() {
+    privacy.on = !!settings && (settings.privacy || (settings.privacy_with_obs && privacy.obs));
+  }
+
+  async function saveSettings() {
+    try { await invoke('set_settings', { settings }); } catch (e) { error = String(e); }
+    applyPrivacy();
+  }
+
+  async function previewShow() {
+    const st = await invoke('show_status');
+    showNote = st.blocked ? `Note: it won't start by itself right now (${st.blocked}).` : '';
+    await invoke('show_preview');
+  }
+
   onMount(() => {
     const un = [];
     (async () => {
@@ -132,6 +150,10 @@
         if (tab === 'backups') showBackups();
       }));
       un.push(await listen('scan-error', (e) => { progress = null; error = String(e.payload); }));
+      settings = await invoke('get_settings');
+      privacy.obs = (await invoke('show_status')).obs;
+      applyPrivacy();
+      un.push(await listen('obs-changed', (e) => { privacy.obs = !!e.payload; applyPrivacy(); }));
     })();
     return () => un.forEach((f) => f());
   });
@@ -147,7 +169,7 @@
       <img src="/icon.png" alt="" />
       <div>
         <h1>Cartographer</h1>
-        <p>v0.3 · map, space, backups &amp; cleanup</p>
+        <p>v0.4 · map, space, backups &amp; cleanup</p>
       </div>
     </div>
 
@@ -202,10 +224,37 @@
       </div>
       <button disabled={fastBusy || !!progress} onclick={toggleFast}>{fastBusy ? '…' : fast ? 'Turn off' : 'Turn on'}</button>
     </div>
-    <label class="toggle">
-      <input type="checkbox" checked={autostart} onchange={toggleAutostart} />
-      <span>Start with Windows (in tray)</span>
-    </label>
+    {#if settings}
+      <div class="opts">
+        <label class="toggle">
+          <input type="checkbox" bind:checked={settings.show_enabled} onchange={saveSettings} />
+          <span>Show mode after
+            <select bind:value={settings.idle_minutes} onchange={saveSettings} disabled={!settings.show_enabled}>
+              {#each [2, 5, 10, 15, 30, 60] as m (m)}<option value={m}>{m}</option>{/each}
+            </select> min away</span>
+        </label>
+        <div class="subrow">
+          <button class="mini" onclick={previewShow}>▶ Preview</button>
+          <span>stops after
+            <select bind:value={settings.show_minutes} onchange={saveSettings}>
+              {#each [5, 10, 20, 30, 60] as m (m)}<option value={m}>{m}</option>{/each}
+            </select> min</span>
+        </div>
+        {#if showNote}<p class="hint">{showNote}</p>{/if}
+        <label class="toggle">
+          <input type="checkbox" bind:checked={settings.privacy} onchange={saveSettings} />
+          <span>Privacy mode {privacy.on && !settings.privacy ? '(on: OBS is open)' : ''}</span>
+        </label>
+        <label class="toggle sub">
+          <input type="checkbox" bind:checked={settings.privacy_with_obs} onchange={saveSettings} />
+          <span>Turn on automatically when OBS is open</span>
+        </label>
+        <label class="toggle">
+          <input type="checkbox" checked={autostart} onchange={toggleAutostart} />
+          <span>Start with Windows (in tray)</span>
+        </label>
+      </div>
+    {/if}
     <p class="hint">Closing the window keeps Cartographer in the tray. Quit from the tray icon.</p>
   </aside>
 
@@ -221,7 +270,7 @@
         <nav>
           {#each view.crumbs as c, i (c.id)}
             {#if i > 0}<span class="sep">›</span>{/if}
-            <button class:cur={i === view.crumbs.length - 1} onclick={() => openDir(c.id)}>{c.name}</button>
+            <button class:cur={i === view.crumbs.length - 1} onclick={() => openDir(c.id)}><span class:pvt={privacy.on && i > 0}>{i > 0 ? pv(c.name) : c.name}</span></button>
           {/each}
         </nav>
         <div class="tot">{fmtBytes(total)} · {fmtCount(view.node.files)} files</div>
@@ -267,7 +316,7 @@
       <div class="body">
         <section class="map">
           {#key view.node.id}
-            <Treemap node={view.node} onopen={openDir} onhover={(d) => (hover = d)} />
+            <Treemap node={view.node} onopen={openDir} onhover={(d) => (hover = d)} hide={privacy.on} />
           {/key}
         </section>
         <section class="list">
@@ -282,7 +331,7 @@
                   onmouseleave={() => (hover = null)}
                 >
                   <span class="ico {k.kind}"></span>
-                  <span class="nm">{k.name}</span>
+                  <span class="nm" class:pvt={privacy.on && k.kind !== 'other' && k.kind !== 'hidden'}>{k.kind === 'other' || k.kind === 'hidden' ? k.name : pv(k.name)}</span>
                   <span class="sz">{fmtBytes(k.size)}</span>
                   <span class="pbar"><span style="width:{total ? (k.size / total) * 100 : 0}%"></span></span>
                 </button>
@@ -296,14 +345,14 @@
       </div>
       <footer>
         {#if info}
-          <b>{info.name}</b>
+          <b class:pvt={privacy.on && info.kind !== 'other' && info.kind !== 'hidden'}>{info.kind === 'other' || info.kind === 'hidden' ? info.name : pv(info.name)}</b>
           <span>{fmtBytes(info.size)}</span>
           {#if info.kind === 'dir'}<span>{fmtCount(info.files)} files</span>{/if}
           {#if info.newest}<span>last changed {fmtDate(info.newest)} ({fmtAgo(info.newest)})</span>{/if}
           {#if info.kind === 'hidden'}<span>Windows, page file, restore points and space this scan can't account for</span>{/if}
           {#if info.kind === 'other'}<span>small files and folders grouped together</span>{/if}
           {#if info.denied && info.kind === 'dir'}<span class="warn">access denied</span>{/if}
-          {#if info.path}<span class="path">{info.path}</span>{/if}
+          {#if info.path}<span class="path" class:pvt={privacy.on}>{pv(info.path)}</span>{/if}
         {/if}
       </footer>
     {:else}

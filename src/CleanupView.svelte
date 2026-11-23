@@ -3,6 +3,7 @@
   import { listen } from '@tauri-apps/api/event';
   import { onMount } from 'svelte';
   import { fmtBytes, fmtAgo, fmtDate } from './format.js';
+  import { privacy, pv } from './privacy.svelte.js';
 
   let { onspace, onreveal, onchanged } = $props();
 
@@ -126,7 +127,7 @@
             <span class="dot big" style="background:{KIND[s.kind]?.color}"></span>
             <div class="main">
               <div class="name">
-                <button class="link" onclick={() => s.scan_id && onspace?.(s.scan_id, s.dir_id)} disabled={!s.scan_id}>{s.name}</button>
+                <button class="link" class:pvt={privacy.on} onclick={() => s.scan_id && onspace?.(s.scan_id, s.dir_id)} disabled={!s.scan_id}>{pv(s.name)}</button>
                 <span class="size">{fmtBytes(s.size)}</span>
               </div>
               <div class="reason">{s.reason}</div>
@@ -135,7 +136,7 @@
                 {#if s.backed_up.length}<span class="chip ok">✓ backed up · {s.backed_up.join(' · ')}</span>
                 {:else if s.kind === 'project' || s.kind === 'download'}<span class="chip warn">not in a backup</span>{/if}
               </div>
-              <div class="path">{s.path}</div>
+              <div class="path" class:pvt={privacy.on}>{pv(s.path)}</div>
             </div>
             <div class="btns">
               <button class="primary" disabled={!!job} onclick={() => (s.action === 'uninstall' ? doAction(s) : (confirm = s))}>{ACTION[s.action].verb}</button>
@@ -157,15 +158,15 @@
 
     <section>
       <h2>Archived and deleted</h2>
-      <p class="note">Archives go to <code>{report.archive_dir}</code>{report.archive_backed_up.length ? `, which is backed up by ${report.archive_backed_up.join(' and ')}` : ' (not in any backup)'}.</p>
+      <p class="note">Archives go to <code>{pv(report.archive_dir)}</code>{report.archive_backed_up.length ? `, which is backed up by ${report.archive_backed_up.join(' and ')}` : ' (not in any backup)'}.</p>
       <ul class="acts">
         {#each archived as a (a.id)}
           <li>
             <span class="tag {a.kind}">{a.kind === 'archive' ? 'Archived' : 'Deleted'}</span>
             <div class="main">
-              <div class="name"><b>{a.name}</b><span class="size">{fmtBytes(a.bytes || a.zip_bytes)}{a.kind === 'archive' ? ` → ${fmtBytes(a.zip_bytes)} zip` : ''}</span></div>
+              <div class="name"><b class:pvt={privacy.on}>{pv(a.name)}</b><span class="size">{fmtBytes(a.bytes || a.zip_bytes)}{a.kind === 'archive' ? ` → ${fmtBytes(a.zip_bytes)} zip` : ''}</span></div>
               <div class="meta">{fmtDate(a.time)} · {fmtAgo(a.time)}{a.kind === 'archive' ? ` · ${a.files} files, verified` : ''}</div>
-              <div class="path">from {a.from}{a.to ? ` · zip: ${a.to}` : ''}</div>
+              <div class="path" class:pvt={privacy.on}>from {pv(a.from)}{a.to ? ` · zip: ${pv(a.to)}` : ''}</div>
             </div>
             <div class="btns">
               <button class="primary" disabled={!!job} onclick={() => (confirm = { restore: a })}>Restore</button>
@@ -181,7 +182,7 @@
           <summary>History ({history.length} restored)</summary>
           <ul class="hist">
             {#each history as a (a.id)}
-              <li>{fmtDate(a.time)} · {a.kind === 'archive' ? 'Archived' : 'Deleted'} <b>{a.name}</b> · restored {fmtAgo(a.restored)}</li>
+              <li>{fmtDate(a.time)} · {a.kind === 'archive' ? 'Archived' : 'Deleted'} <b>{pv(a.name)}</b> · restored {fmtAgo(a.restored)}</li>
             {/each}
           </ul>
         </details>
@@ -195,19 +196,19 @@
     <div class="box">
       {#if confirm.restore}
         {@const a = confirm.restore}
-        <h3>Restore {a.name}?</h3>
-        <p>{a.kind === 'archive' ? `Unzips it back to ${a.from}, checks every file came back, then sends the zip to the Recycle Bin.` : `Takes it back out of the Recycle Bin to ${a.from}.`}</p>
+        <h3>Restore {pv(a.name)}?</h3>
+        <p>{a.kind === 'archive' ? `Unzips it back to ${pv(a.from)}, checks every file came back, then sends the zip to the Recycle Bin.` : `Takes it back out of the Recycle Bin to ${pv(a.from)}.`}</p>
         <div class="row">
-          <button class="primary" onclick={() => run('restore', { id: a.id }, `Restore ${a.name}`)}>Restore</button>
+          <button class="primary" onclick={() => run('restore', { id: a.id }, `Restore ${pv(a.name)}`)}>Restore</button>
           <button onclick={() => (confirm = null)}>Cancel</button>
         </div>
       {:else}
         {@const s = confirm}
-        <h3>{ACTION[s.action].verb} {s.name}?</h3>
+        <h3>{ACTION[s.action].verb} {pv(s.name)}?</h3>
         <dl>
           <dt>Size</dt><dd>{fmtBytes(s.size)}</dd>
-          <dt>Location</dt><dd class="path">{s.path}</dd>
-          {#if s.action === 'archive'}<dt>Zip goes to</dt><dd class="path">{report.archive_dir}\{s.kind === 'project' ? 'Projects' : 'Downloads'}</dd>{/if}
+          <dt>Location</dt><dd class="path">{pv(s.path)}</dd>
+          {#if s.action === 'archive'}<dt>Zip goes to</dt><dd class="path">{pv(report.archive_dir)}\{s.kind === 'project' ? 'Projects' : 'Downloads'}</dd>{/if}
         </dl>
         <p>{ACTION[s.action].note}</p>
         <div class="row">

@@ -2,7 +2,9 @@
   import { hierarchy, treemap, treemapSquarify } from 'd3-hierarchy';
   import { fmtBytes, hueFor } from './format.js';
 
-  let { node, onopen, onhover } = $props();
+  import { mask } from './privacy.svelte.js';
+  let { node, onopen, onhover, hide = false } = $props();
+  const nm = (d) => (hide && d.data.kind !== 'other' && d.data.kind !== 'hidden' ? mask(d.data.name) : d.data.name);
   let w = $state(0);
   let h = $state(0);
 
@@ -86,11 +88,11 @@
       >
         <rect width={cw} height={ch} rx="4" fill={fill(d)} stroke={stroke(d)} stroke-opacity={d.depth === 1 ? 0.55 : 0.35} />
         {#if d.depth === 1 && d.children && cw > 50 && ch > 40}
-          <text x="7" y="14" class="hdr">
-            {fit(d.data.name, cw - 60)}<tspan class="sz" dx="6">{cw > 120 ? fmtBytes(d.data.size) : ''}</tspan>
+          <text x="7" y="14" class="hdr" class:blur={hide && d.data.kind !== 'other' && d.data.kind !== 'hidden'}>
+            {fit(nm(d), cw - 60)}<tspan class="sz" dx="6">{cw > 120 ? fmtBytes(d.data.size) : ''}</tspan>
           </text>
         {:else if !d.children && cw > 46 && ch > 22}
-          <text x="6" y="15" class="lbl">{fit(d.data.name, cw)}</text>
+          <text x="6" y="15" class="lbl" class:blur={hide && d.data.kind !== 'other' && d.data.kind !== 'hidden'}>{fit(nm(d), cw)}</text>
           {#if ch > 38 && cw > 46}
             <text x="6" y="30" class="lbl sz">{fmtBytes(d.data.size)}</text>
           {/if}
@@ -110,4 +112,5 @@
   text { pointer-events: none; font-size: 12px; fill: #e6edf7; }
   .hdr { font-weight: 600; font-size: 12px; }
   .sz { fill: #9fb0c8; font-weight: 400; }
+  .blur { filter: blur(2.5px); }
 </style>

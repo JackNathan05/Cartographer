@@ -6,6 +6,7 @@ mod cleanup;
 mod drives;
 mod graph;
 mod helper;
+mod idle;
 mod mft;
 mod scan;
 
@@ -24,6 +25,7 @@ struct AppState {
     db_path: PathBuf,
     conn: Mutex<Connection>,
     scanning: Arc<AtomicBool>,
+    showing: Arc<AtomicBool>,
 }
 
 #[derive(Serialize, Clone)]
@@ -250,6 +252,32 @@ fn open_uninstall() -> Result<(), String> {
     std::process::Command::new("explorer").arg("ms-settings:appsfeatures").spawn().map(|_| ()).map_err(err)
 }
 
+#[tauri::command(async)]
+fn get_settings() -> idle::Settings {
+    idle::load()
+}
+
+#[tauri::command(async)]
+fn set_settings(settings: idle::Settings) -> Result<(), String> {
+    idle::save(&settings)
+}
+
+/// Why show mode wouldn't start right now, plus whether OBS is open.
+#[tauri::command(async)]
+fn show_status() -> serde_json::Value {
+    serde_json::json!({ "blocked": idle::blocked_reason(), "obs": idle::obs_running(), "idle_secs": idle::idle_secs() })
+}
+
+#[tauri::command(async)]
+fn show_preview(app: AppHandle) {
+    idle::open_show(&app);
+}
+
+#[tauri::command(async)]
+fn show_exit(app: AppHandle) {
+    idle::close_show(&app);
+}
+
 /// The map's layout (forces, radiate/pull/push points, pinned and last positions).
 #[tauri::command(async)]
 fn load_layout() -> Option<serde_json::Value> {
@@ -408,7 +436,9 @@ fn main() {
             std::fs::create_dir_all(&dir)?;
             let db_path = dir.join("index.db");
             let conn = db::open(&db_path)?;
-            app.manage(AppState { db_path, conn: Mutex::new(conn), scanning: Arc::new(AtomicBool::new(false)) });
+            let showing = Arc::new(AtomicBool::new(false));
+            app.manage(AppState { db_path, conn: Mutex::new(conn), scanning: Arc::new(AtomicBool::new(false)), showing: showing.clone() });
+            idle::start(app.handle().clone(), showing);
 
             let open = MenuItem::with_id(app, "open", "Open Cartographer", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -436,7 +466,7 @@ fn main() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![drives, scans, view, graph, backup_report, cleanup_report, cleanup_hide, cleanup_unhide_all, cleanup_run, open_uninstall, load_layout, save_layout, reset_layout, is_scanning, start_scan, helper_status, set_fast_scan, reveal, open_path])
+        .invoke_handler(tauri::generate_handler![drives, scans, view, graph, get_settings, set_settings, show_status, show_preview, show_exit, backup_report, cleanup_report, cleanup_hide, cleanup_unhide_all, cleanup_run, open_uninstall, load_layout, save_layout, reset_layout, is_scanning, start_scan, helper_status, set_fast_scan, reveal, open_path])
         .build(tauri::generate_context!())
         .expect("error while building Cartographer");
 

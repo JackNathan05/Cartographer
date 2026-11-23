@@ -281,3 +281,12 @@ Rust is a good fit for the scanner and file actions (speed + safety).
 | Ghost nodes | Archived items appear on the map (faded) with a Restore button |
 | Self-test | `--cleanup-selftest` archives + restores and deletes + restores a throwaway folder: 12/12 pass |
 | Dot size controls | Dot size (%) and Shrink per level (%) in the layout editor |
+
+### v0.4 status (2026-11-23)
+| Item | State |
+|---|---|
+| 3D view | Done: 2D/3D switch on the Map; three.js lazy-loaded (512 kB chunk only when opened); 2D layout x/y + height per folder level; instanced spheres + additive glow + links + starfield + polar grid; orbit controls, hover names, click to fly |
+| Show mode | Done: idle loop in the Rust core (GetLastInputInfo every 2 s); fullscreen always-on-top window; any key / click / scroll / real mouse move exits; blocked by fullscreen apps/games, locked screen, presentation mode, OBS, battery; auto-stops after show_minutes and waits for you to come back; 30 fps cap; never touches power settings. Settings in settings.json, Preview button |
+| Show choreography | Alternates wide orbit and fly-bys to the biggest / most recently changed items, with a caption (name · size) |
+| Privacy mode | Done: names scrambled (deterministic random letters, same shape, drive letters kept) then blurred, in Map (2D/3D labels, hover, panel), Space, Backups, Cleanup and Show mode captions; optional auto-on while OBS is open |
+| Not yet | Multi-monitor choice, .scr screensaver, video-call detection |

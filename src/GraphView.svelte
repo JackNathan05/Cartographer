@@ -5,9 +5,15 @@
   import { onMount } from 'svelte';
   import { fmtBytes, fmtAgo, fmtDate } from './format.js';
   import { createLayout, defaultLayout, DEFAULTS, SLIDERS, POINT_TYPES } from './layout.js';
+  import { privacy, pv, mask } from './privacy.svelte.js';
 
   let { data, onspace, onreveal, onchanged } = $props();
   let restoring = $state('');
+  // 3D view
+  let view3d = $state(false);
+  let box3d;
+  let scene3 = null;
+  let tip3 = $state(null); // { label, size, x, y }
 
   const KINDS = {
     drive: { label: 'Drives', color: '#e2e8f0' },
@@ -225,7 +231,9 @@
     ctx.roundRect(spot.x, spot.y, w, h, 5);
     ctx.fill();
     ctx.fillStyle = s.labelColor.color;
-    ctx.fillText(d.label, spot.x + 5, spot.y + h / 2 + size / 3);
+    if (privacy.on && d.kind !== 'drive') ctx.filter = 'blur(2.5px)';
+    ctx.fillText(privacy.on && d.kind !== 'drive' ? mask(d.label) : d.label, spot.x + 5, spot.y + h / 2 + size / 3);
+    ctx.filter = 'none';
   }
 
   // ---- interaction helpers
@@ -247,7 +255,9 @@
     ctx.fill();
     ctx.stroke();
     ctx.fillStyle = '#e6edf7';
-    ctx.fillText(label, x + 8, y + h / 2 + size / 3);
+    if (privacy.on && d.kind !== 'drive') ctx.filter = 'blur(2.5px)';
+    ctx.fillText(privacy.on && d.kind !== 'drive' ? mask(label) : label, x + 8, y + h / 2 + size / 3);
+    ctx.filter = 'none';
     ctx.beginPath();
     ctx.arc(d.x, d.y, d.size + 3, 0, Math.PI * 2);
     ctx.strokeStyle = 'rgba(94,234,212,0.9)';
@@ -272,7 +282,7 @@
   }
 
   $effect(() => {
-    hovered; selected; query; hidden; editing; selectedPoint; pinnedCount; showNames;
+    hovered; selected; query; hidden; editing; selectedPoint; pinnedCount; showNames; privacy.on;
     renderer?.refresh({ skipIndexation: true });
   });
 
@@ -343,6 +353,33 @@
     if (pointId) layout.aim[nodeId] = pointId;
     else delete layout.aim[nodeId];
     changed(0.6);
+  }
+
+  async function open3d() {
+    if (!engine || !box3d) return;
+    const { createScene3D } = await import('./scene3d.js'); // three.js loads only when 3D is opened
+    if (!view3d) return;
+    const nodes = engine.nodes.map((n) => {
+      const d = byId.get(n.id);
+      return { id: n.id, kind: n.kind, label: d?.label ?? n.id, size: n.size, r: n.r, x: n.x, y: n.y, depth: n.depth, newest: d?.newest ?? 0 };
+    });
+    const links = data.links.filter((l) => l.kind === 'lives_on');
+    scene3 = createScene3D(box3d, nodes, links, {
+      mode: 'interactive',
+      mask: (t) => (privacy.on ? mask(t) : t),
+      onHover: (n, x, y) => {
+        if (!n) { tip3 = null; return; }
+        const r = box3d.getBoundingClientRect();
+        tip3 = { label: n.kind === 'drive' ? n.label : pv(n.label), size: n.size, x: x - r.left, y: y - r.top };
+      },
+      onPick: (n) => (selected = n.id),
+    });
+  }
+  function toggle3d() {
+    view3d = !view3d;
+    tip3 = null;
+    if (view3d) { engine?.sim.stop(); queueMicrotask(open3d); }
+    else { scene3?.dispose(); scene3 = null; engine?.sim.alpha(0.05).restart(); }
   }
 
   async function restoreArchived(n) {
@@ -530,7 +567,7 @@
         else alert(e.payload.message);
       }).then((u) => (unlisten = u)),
     );
-    return () => { alive = false; unlisten?.(); stopAll(); };
+    return () => { alive = false; unlisten?.(); scene3?.dispose(); stopAll(); };
   });
 
   const kindName = (k) => KINDS[k]?.label?.replace(/s$/, '') ?? k;
@@ -538,7 +575,11 @@
 </script>
 
 <div class="wrap" class:placing>
-  <div class="canvas" bind:this={container}></div>
+  <div class="canvas" bind:this={container} class:off={view3d}></div>
+  <div class="box3d" bind:this={box3d} class:on={view3d}></div>
+  {#if view3d && tip3}
+    <div class="tip3" style="left:{tip3.x + 14}px; top:{tip3.y + 10}px"><b class:pvt={privacy.on}>{tip3.label}</b> <span>{fmtBytes(tip3.size)}</span></div>
+  {/if}
 
   <div class="tools">
     <input placeholder="Search the map…  (Enter to jump)" bind:value={query} onkeydown={onSearchKey} />
@@ -546,9 +587,14 @@
     <button class="switch" class:on={showNames} role="switch" aria-checked={showNames} title="Show every name on the map" onclick={toggleNames}>
       <span class="track"><span class="knob"></span></span>Names
     </button>
+    <button class="switch" class:on={view3d} role="switch" aria-checked={view3d} title="Show the map in 3D" onclick={toggle3d}>
+      <span class="track"><span class="knob"></span></span>3D
+    </button>
+    {#if !view3d}
     <button class="edit" class:on={editing} onclick={toggleEditing}>
       {editing ? (saving ? 'Saving…' : 'Done editing') : '✎ Edit layout'}{dirty ? ' •' : ''}
     </button>
+    {/if}
   </div>
 
   {#if placing}
@@ -581,7 +627,7 @@
     {#if sel}
       <h3>Selected dot</h3>
       <div class="pt sel">
-        <div class="pthead"><span class="dot" style="background:{colorOf(sel)}"></span><b class="selname">{sel.label}</b></div>
+        <div class="pthead"><span class="dot" style="background:{colorOf(sel)}"></span><b class="selname" class:pvt={privacy.on && sel.kind !== 'drive'}>{sel.kind === 'drive' ? sel.label : pv(sel.label)}</b></div>
         <label>Straighten its branches away from
           <select value={layout.aim[sel.id] ?? ''} onchange={(e) => setAim(sel.id, e.currentTarget.value)}>
             <option value="">{sel.kind === 'drive' ? 'Nearest radiate point' : 'Its parent (default)'}</option>
@@ -638,8 +684,8 @@
     {#if pinnedCount}<div class="row"><button onclick={unpinAll}>Unpin all</button></div>{/if}
   {:else if sel}
     <div class="kind" style="color:{KINDS[sel.kind]?.color}">{kindName(sel.kind)}</div>
-    <h2>{sel.label}</h2>
-    {#if sel.detail}<div class="sub">{sel.detail}</div>{/if}
+    <h2 class:pvt={privacy.on && sel.kind !== 'drive'}>{sel.kind === 'drive' ? sel.label : pv(sel.label)}</h2>
+    {#if sel.detail}<div class="sub" class:pvt={privacy.on && sel.kind !== 'drive'}>{sel.kind === 'drive' ? sel.detail : pv(sel.detail)}</div>{/if}
     <dl>
       <dt>Size</dt><dd>{fmtBytes(sel.size)}</dd>
       {#if sel.newest}<dt>Last changed</dt><dd>{fmtDate(sel.newest)} <span class="muted">({fmtAgo(sel.newest)})</span></dd>{/if}
@@ -649,7 +695,7 @@
           {#if sel.backed_up}<span class="ok">✓ {sel.backups.join(' · ')}</span>{:else}<span class="bad">Not in any backup</span>{/if}
         </dd>
       {/if}
-      {#if sel.path}<dt>Path</dt><dd class="path">{sel.path}</dd>{/if}
+      {#if sel.path}<dt>Path</dt><dd class="path" class:pvt={privacy.on}>{pv(sel.path)}</dd>{/if}
     </dl>
     <div class="actions">
       {#if sel.scan_id && sel.dir_id}<button onclick={() => onspace?.(sel.scan_id, sel.dir_id)}>Open in Space view</button>{/if}
@@ -662,20 +708,20 @@
     {#if neighbors.up.length}
       <h3>Lives in</h3>
       {#each neighbors.up as n (n.id)}
-        <button class="nb" onclick={() => { selected = n.id; flyTo(n.id); }}><span class="dot" style="background:{colorOf(n)}"></span>{n.label}</button>
+        <button class="nb" onclick={() => { selected = n.id; flyTo(n.id); }}><span class="dot" style="background:{colorOf(n)}"></span><span class:pvt={privacy.on && n.kind !== 'drive'}>{n.kind === 'drive' ? n.label : pv(n.label)}</span></button>
       {/each}
     {/if}
     {#if neighbors.backups.length}
       <h3>Backed up to</h3>
       {#each neighbors.backups as n (n.id)}
-        <button class="nb" onclick={() => { selected = n.id; flyTo(n.id); }}><span class="dot" style="background:{colorOf(n)}"></span>{n.label}</button>
+        <button class="nb" onclick={() => { selected = n.id; flyTo(n.id); }}><span class="dot" style="background:{colorOf(n)}"></span><span class:pvt={privacy.on && n.kind !== 'drive'}>{n.kind === 'drive' ? n.label : pv(n.label)}</span></button>
       {/each}
     {/if}
     {#if neighbors.down.length}
       <h3>{sel.kind === 'backup' ? 'Backs up' : 'Contains'}</h3>
       {#each neighbors.down as n (n.id)}
         <button class="nb" onclick={() => { selected = n.id; flyTo(n.id); }}>
-          <span class="dot" style="background:{colorOf(n)}"></span><span class="nm">{n.label}</span><span class="sz">{fmtBytes(n.size)}</span>
+          <span class="dot" style="background:{colorOf(n)}"></span><span class="nm" class:pvt={privacy.on}>{pv(n.label)}</span><span class="sz">{fmtBytes(n.size)}</span>
         </button>
       {/each}
       {#if neighbors.more}<div class="muted small">+ {neighbors.more} more</div>{/if}
@@ -698,6 +744,11 @@
   .wrap { position: relative; min-height: 0; overflow: hidden; background: radial-gradient(ellipse at 50% 45%, #101a2a 0%, #0b0f17 70%); }
   .wrap.placing { cursor: crosshair; }
   .canvas { position: absolute; inset: 0; }
+  .canvas.off { visibility: hidden; }
+  .box3d { position: absolute; inset: 0; display: none; }
+  .box3d.on { display: block; }
+  .tip3 { position: absolute; pointer-events: none; padding: 5px 9px; border-radius: 7px; background: rgba(10,15,24,0.92); border: 1px solid rgba(94,234,212,0.5); font-size: 12.5px; white-space: nowrap; }
+  .tip3 span { color: var(--muted); margin-left: 6px; }
   .tools { position: absolute; top: 12px; left: 12px; display: flex; gap: 6px; }
   .tools input { width: 280px; padding: 8px 11px; border-radius: 9px; border: 1px solid #22304a; background: rgba(13,19,30,0.9); color: var(--text); font: inherit; font-size: 13px; outline: none; }
   .tools input:focus { border-color: var(--accent); }

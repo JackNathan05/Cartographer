@@ -106,3 +106,13 @@ footer .warn { color: var(--warn); }
 .rebuild:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
 
 .body.single { grid-template-columns: minmax(0, 1fr); }
+
+/* privacy mode: text is already scrambled; the blur just makes it look intentional */
+.pvt { filter: blur(3.5px); user-select: none; }
+
+.opts { display: flex; flex-direction: column; gap: 2px; }
+.opts select { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 5px; font: inherit; font-size: 12px; padding: 1px 2px; }
+.subrow { display: flex; align-items: center; gap: 10px; padding: 0 4px 4px 27px; font-size: 12px; color: var(--muted); }
+.mini { padding: 3px 9px; border-radius: 6px; border: 1px solid var(--line); color: var(--accent); font-size: 12px; }
+.mini:hover { border-color: var(--accent); background: #12302f; }
+.toggle.sub { padding-left: 27px; font-size: 12px; color: var(--muted); }

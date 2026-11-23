@@ -9,7 +9,7 @@ Cartographer is a lightweight Windows desktop app (Tauri + Rust + Svelte) that m
 folders, projects and apps — and, in later versions, suggests what to archive and drifts into a
 cinematic 3D "show mode" when you step away. See [DESIGN.md](DESIGN.md) for the full plan.
 
-## Status: v0.3 (map, space, backups and cleanup)
+## Status: v0.4 (3D, Show mode, Privacy mode)
 
 - **Fast scan:** reads the NTFS Master File Table directly (C: with 1.76M files in ~10 s) through a small elevated helper; falls back to a parallel folder walk
 - **Map:** a force-directed graph of drives, folders, projects (git repos and `Projects` folders),
@@ -21,6 +21,12 @@ cinematic 3D "show mode" when you step away. See [DESIGN.md](DESIGN.md) for the 
   apps not opened in a year, and old Downloads. One-click **Archive** (zip, verify every file, originals to the Recycle Bin),
   **Delete** (Recycle Bin), or **Uninstall…**; snooze or never-suggest; everything can be **Restored**. Archived items
   stay on the map as ghost dots
+- **3D view:** the map in 3D (three.js, loaded only when opened): each folder level lifted to its own height, orbit / zoom, hover and click
+- **Show mode:** after N minutes away, a fullscreen cinematic fly-around of the 3D map with captions and a clock. Any input
+  closes it. Never starts during fullscreen apps / games, a locked screen, OBS, or on battery; stops after M minutes so
+  Windows still sleeps; 30 fps cap. Preview button in the sidebar
+- **Privacy mode:** real structure and sizes, every name replaced with random letters *then* blurred (the real text is
+  never drawn). Can switch on automatically while OBS is open
 - Local SQLite index
 - Treemap "space view": click to zoom into folders, breadcrumbs, biggest-items list
 - System / protected space shown as its own block, so the map adds up to what Windows reports

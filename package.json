@@ -1,7 +1,7 @@
 {
   "name": "cartographer",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -14,7 +14,8 @@
     "d3-force": "^3.0.1",
     "d3-hierarchy": "^3.1.2",
     "graphology": "^0.25.4",
-    "sigma": "^3.0.3"
+    "sigma": "^3.0.3",
+    "three": "^0.170.0"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.3",
