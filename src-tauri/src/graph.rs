@@ -225,7 +225,7 @@ fn wsl(out: &mut Vec<Leaf>) {
     }
 }
 
-fn is_gamey(path_key: &str, publisher: &str) -> bool {
+pub(crate) fn is_gamey(path_key: &str, publisher: &str) -> bool {
     ["\\steamapps\\", "\\epic games\\", "\\epicgames\\", "\\xboxgames\\", "\\games\\", "riot games", "\\battle.net"]
         .iter()
         .any(|m| path_key.contains(m))
@@ -289,18 +289,50 @@ fn latest_scans(conn: &Connection) -> rusqlite::Result<Vec<(i64, String, i64)>> 
     r.collect()
 }
 
+/// Finds folders in the index by path (keys are lowercase paths). Walks down from each drive's root
+/// one folder name at a time using the parent index, so it never reads the whole table
+/// (~1 ms for hundreds of paths instead of ~1 s per call on a 400k-folder C: drive).
 pub(crate) fn lookup(conn: &Connection, keys: &HashSet<String>) -> rusqlite::Result<HashMap<String, DirInfo>> {
-    let json = serde_json::to_string(&keys.iter().collect::<Vec<_>>()).unwrap_or_else(|_| "[]".into());
-    let mut s = conn.prepare(
-        "SELECT id, scan_id, path, size, newest FROM dirs WHERE lower(path) IN (SELECT value FROM json_each(?1))",
+    type Row = (i64, i64, String, i64, i64);
+    let mut roots: HashMap<String, i64> = HashMap::new();
+    for (_, root, root_dir) in latest_scans(conn)? {
+        roots.insert(key(&root), root_dir);
+    }
+    let mut by_id = conn.prepare_cached("SELECT id, scan_id, path, size, newest FROM dirs WHERE id = ?1")?;
+    let mut child = conn.prepare_cached(
+        "SELECT id, scan_id, path, size, newest FROM dirs WHERE parent_id = ?1 AND lower(name) = ?2 LIMIT 1",
     )?;
-    let rows = s.query_map(params![json], |r| {
-        Ok(DirInfo { id: r.get(0)?, scan: r.get(1)?, path: r.get(2)?, size: r.get(3)?, newest: r.get(4)? })
-    })?;
+    let row = |r: &rusqlite::Row| -> rusqlite::Result<Row> { Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)) };
+    let mut memo: HashMap<String, Option<Row>> = HashMap::new();
     let mut m = HashMap::new();
-    for r in rows {
-        let r = r?;
-        m.insert(r.path.to_lowercase(), r);
+    for k in keys {
+        let k = key(k);
+        if k.len() < 3 || !k.is_char_boundary(3) {
+            continue;
+        }
+        let root_key = k[..3].to_string();
+        let Some(&root_dir) = roots.get(&root_key) else { continue };
+        if !memo.contains_key(&root_key) {
+            let r = by_id.query_row([root_dir], row).ok();
+            memo.insert(root_key.clone(), r);
+        }
+        let mut prefix = root_key;
+        let mut cur = memo.get(&prefix).cloned().flatten();
+        for seg in k[3..].split('\\').filter(|x| !x.is_empty()) {
+            let Some(parent) = cur.as_ref().map(|r| r.0) else { break };
+            prefix = if prefix.ends_with('\\') { format!("{prefix}{seg}") } else { format!("{prefix}\\{seg}") };
+            cur = match memo.get(&prefix) {
+                Some(v) => v.clone(),
+                None => {
+                    let v = child.query_row(params![parent, seg], row).ok();
+                    memo.insert(prefix.clone(), v.clone());
+                    v
+                }
+            };
+        }
+        if let Some((id, scan, path, size, newest)) = cur.filter(|_| prefix == k) {
+            m.insert(k, DirInfo { id, scan, path, size, newest });
+        }
     }
     Ok(m)
 }
@@ -323,8 +355,8 @@ fn projects(conn: &Connection, profile_key: &str) -> rusqlite::Result<Vec<String
     // everything directly inside a "Projects" folder; a folder whose direct children are repos is a category
     let mut cands: Vec<String> = Vec::new();
     let homes = [format!(r"{profile_key}\projects"), format!(r"{profile_key}\documents\projects")];
-    let mut s = conn.prepare("SELECT id, path FROM dirs WHERE lower(name) = 'projects'")?;
-    let proj_dirs: Vec<(i64, String)> = s.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.filter_map(|x| x.ok()).collect();
+    let found = lookup(conn, &homes.iter().cloned().collect())?;
+    let proj_dirs: Vec<(i64, String)> = homes.iter().filter_map(|h| found.get(h)).map(|d| (d.id, d.path.clone())).collect();
     let mut kids = conn.prepare("SELECT id, path FROM dirs WHERE parent_id = ?1")?;
     for (id, p) in proj_dirs {
         if !homes.contains(&p.to_lowercase()) {
@@ -551,4 +583,14 @@ pub fn build(conn: &Connection) -> rusqlite::Result<GraphData> {
     }
 
     Ok(GraphData { nodes, links, built_ms: t0.elapsed().as_millis() as u64, config_path: config_path().to_string_lossy().into() })
+}
+
+/// Games found through the launchers (Steam, Epic, Ubisoft, Xbox): (name, launcher, folder).
+pub(crate) fn game_leaves() -> Vec<(String, String, String)> {
+    let mut v = Vec::new();
+    steam_games(&mut v);
+    epic_games(&mut v);
+    ubisoft_games(&mut v);
+    xbox_games(&mut v);
+    v.into_iter().map(|l| (l.label, l.detail.unwrap_or_default(), l.path)).collect()
 }

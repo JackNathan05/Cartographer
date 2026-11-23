@@ -8,6 +8,8 @@
   import BackupView from './BackupView.svelte';
   import CleanupView from './CleanupView.svelte';
   import HealthView from './HealthView.svelte';
+  import TimelineView from './TimelineView.svelte';
+  import ProjectsView from './ProjectsView.svelte';
   import { fmtBytes, fmtCount, fmtAgo, fmtDate } from './format.js';
   import { privacy, pv } from './privacy.svelte.js';
 
@@ -175,7 +177,7 @@
       <img src="/icon.png" alt="" />
       <div>
         <h1>Cartographer</h1>
-        <p>v0.5 Â· map, space, backups, cleanup &amp; health</p>
+        <p>v0.6 · map, projects, timeline &amp; more</p>
       </div>
     </div>
 
@@ -195,14 +197,14 @@
           <div class="bar"><div style="width:{pct * 100}%" class:warn={pct > 0.9}></div></div>
           <div class="meta">
             {#if s}
-              {fmtBytes(used)} of {fmtBytes(d.total)} Â· scanned {fmtAgo(s.started)} in {(s.duration_ms / 1000).toFixed(1)} s{s.method === 'fast' ? ' âš¡' : ''}
+              {fmtBytes(used)} of {fmtBytes(d.total)} · scanned {fmtAgo(s.started)} in {(s.duration_ms / 1000).toFixed(1)} s{s.method === 'fast' ? ' ⚡' : ''}
             {:else}
-              {fmtBytes(used)} of {fmtBytes(d.total)} Â· not scanned yet
+              {fmtBytes(used)} of {fmtBytes(d.total)} · not scanned yet
             {/if}
           </div>
         </button>
         <button class="scanbtn" disabled={!!progress} onclick={() => scan(d.letter)} title="Scan {d.letter}:">
-          {s ? 'â†»' : 'Scan'}
+          {s ? '↻' : 'Scan'}
         </button>
       </div>
     {/each}
@@ -211,11 +213,11 @@
       <div class="progress">
         <div class="spinner"></div>
         <div>
-          <b>Scanning {progress.root}{phaseLabel(progress) ? ` Â· ${phaseLabel(progress)}` : ''}</b>
+          <b>Scanning {progress.root}{phaseLabel(progress) ? ` · ${phaseLabel(progress)}` : ''}</b>
           {#if progress.total_records && phaseLabel(progress) === 'reading index'}
-            <span>{Math.round((progress.records / progress.total_records) * 100)}% of {fmtCount(progress.total_records)} records Â· {progress.seconds?.toFixed(1)} s</span>
+            <span>{Math.round((progress.records / progress.total_records) * 100)}% of {fmtCount(progress.total_records)} records · {progress.seconds?.toFixed(1)} s</span>
           {:else}
-            <span>{fmtCount(progress.files)} files Â· {fmtBytes(progress.bytes)} Â· {progress.seconds?.toFixed(1)} s</span>
+            <span>{fmtCount(progress.files)} files · {fmtBytes(progress.bytes)} · {progress.seconds?.toFixed(1)} s</span>
           {/if}
         </div>
       </div>
@@ -225,10 +227,10 @@
     <div class="spacer"></div>
     <div class="fast" class:on={fast}>
       <div>
-        <b>âš¡ Fast scan {fast ? 'on' : 'off'}</b>
+        <b>⚡ Fast scan {fast ? 'on' : 'off'}</b>
         <span>{fast ? 'Reads the drive index directly. NTFS drives scan in seconds.' : 'Reads the drive index directly. Needs admin once (one Windows prompt).'}</span>
       </div>
-      <button disabled={fastBusy || !!progress} onclick={toggleFast}>{fastBusy ? 'â€¦' : fast ? 'Turn off' : 'Turn on'}</button>
+      <button disabled={fastBusy || !!progress} onclick={toggleFast}>{fastBusy ? '…' : fast ? 'Turn off' : 'Turn on'}</button>
     </div>
     {#if settings}
       <div class="opts">
@@ -240,7 +242,7 @@
             </select> min away</span>
         </label>
         <div class="subrow">
-          <button class="mini" onclick={previewShow}>â–¶ Preview</button>
+          <button class="mini" onclick={previewShow}>▶ Preview</button>
           <span>stops after
             <select bind:value={settings.show_minutes} onchange={saveSettings}>
               {#each [5, 10, 20, 30, 60] as m (m)}<option value={m}>{m}</option>{/each}
@@ -278,24 +280,34 @@
         <button class:on={tab === 'space'} onclick={() => (tab = 'space')}>Space</button>
         <button class:on={tab === 'backups'} onclick={showBackups}>Backups</button>
         <button class:on={tab === 'cleanup'} onclick={() => (tab = 'cleanup')}>Cleanup</button>
+        <button class:on={tab === 'projects'} onclick={() => (tab = 'projects')}>Projects</button>
+        <button class:on={tab === 'timeline'} onclick={() => (tab = 'timeline')}>Timeline</button>
         <button class:on={tab === 'health'} onclick={() => (tab = 'health')}>Health{#if healthCount}<span class="badge">{healthCount}</span>{/if}</button>
       </div>
       {#if tab === 'space' && view}
         <nav>
           {#each view.crumbs as c, i (c.id)}
-            {#if i > 0}<span class="sep">â€º</span>{/if}
+            {#if i > 0}<span class="sep">›</span>{/if}
             <button class:cur={i === view.crumbs.length - 1} onclick={() => openDir(c.id)}><span class:pvt={privacy.on && i > 0}>{i > 0 ? pv(c.name) : c.name}</span></button>
           {/each}
         </nav>
-        <div class="tot">{fmtBytes(total)} Â· {fmtCount(view.node.files)} files</div>
+        <div class="tot">{fmtBytes(total)} · {fmtCount(view.node.files)} files</div>
       {:else}
         <nav></nav>
         {#if tab === 'map' && graphData}
-          <button class="rebuild" disabled={graphLoading} onclick={loadGraph}>{graphLoading ? 'Updatingâ€¦' : 'â†» Refresh map'}</button>
+          <button class="rebuild" disabled={graphLoading} onclick={loadGraph}>{graphLoading ? 'Updating…' : '↻ Refresh map'}</button>
         {/if}
       {/if}
     </header>
-    {#if tab === 'health'}
+    {#if tab === 'projects'}
+      <div class="body single">
+        <ProjectsView onspace={openSpace} />
+      </div>
+    {:else if tab === 'timeline'}
+      <div class="body single">
+        <TimelineView onspace={openSpace} onreveal={(p) => invoke('reveal', { path: p })} />
+      </div>
+    {:else if tab === 'health'}
       <div class="body single">
         <HealthView
           oncount={(n) => (healthCount = n)}
@@ -317,7 +329,7 @@
           <BackupView report={backupData} onspace={openSpace} onreveal={(p) => invoke('reveal', { path: p })} />
         </div>
       {:else}
-        <div class="empty"><h2>Reading your backupsâ€¦</h2></div>
+        <div class="empty"><h2>Reading your backups…</h2></div>
       {/if}
     {:else if tab === 'map'}
       {#if graphData}
@@ -330,7 +342,7 @@
         <div class="empty">
           <img src="/icon.png" alt="" />
           {#if graphLoading}
-            <h2>Drawing your mapâ€¦</h2>
+            <h2>Drawing your map…</h2>
             <p>Reading drives, projects, games and apps.</p>
           {:else}
             <h2>Map your PC</h2>
@@ -362,7 +374,7 @@
                   <span class="pbar"><span style="width:{total ? (k.size / total) * 100 : 0}%"></span></span>
                 </button>
                 {#if k.path}
-                  <button class="rv" title="Show in Explorer" onclick={() => invoke('reveal', { path: k.path })}>â†—</button>
+                  <button class="rv" title="Show in Explorer" onclick={() => invoke('reveal', { path: k.path })}>↗</button>
                 {/if}
               </li>
             {/each}

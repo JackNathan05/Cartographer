@@ -9,7 +9,7 @@ Cartographer is a lightweight Windows desktop app (Tauri + Rust + Svelte) that m
 folders, projects and apps — and, in later versions, suggests what to archive and drifts into a
 cinematic 3D "show mode" when you step away. See [DESIGN.md](DESIGN.md) for the full plan.
 
-## Status: v0.5 (health dashboard, live updates)
+## Status: v0.6 (project cards, timeline)
 
 - **Fast scan:** reads the NTFS Master File Table directly (C: with 1.76M files in ~10 s) through a small elevated helper; falls back to a parallel folder walk
 - **Map:** a force-directed graph of drives, folders, projects (git repos and `Projects` folders),
@@ -32,6 +32,12 @@ cinematic 3D "show mode" when you step away. See [DESIGN.md](DESIGN.md) for the 
   each drive's scan is, and folders that aren't backed up. Each issue links to where you fix it; the tab shows a badge
 - **Live updates:** every NTFS drive is watched for changes (noise like Temp, caches, Windows and the Recycle Bin is
   ignored); a changed drive is rescanned in the background at most every 30 min, only after a minute of no input
+- **Projects:** a card for every project: what it's built with (Rust, Svelte, Python, Docker...), the first line of
+  its README, size, last edit, git branch / uncommitted changes / unpushed commits / last commit, and which backups
+  cover it. Open it in VS Code, Explorer, a terminal or on GitHub in one click. Filter to the ones that need a look
+- **Timeline:** what changed today / this week / this month: folders that grew, shrank, appeared or were deleted
+  (from a small daily snapshot kept after each scan), apps and games installed or updated, and big files added
+  or changed. Drive size history as sparklines
 - Local SQLite index
 - Treemap "space view": click to zoom into folders, breadcrumbs, biggest-items list
 - System / protected space shown as its own block, so the map adds up to what Windows reports
@@ -75,6 +81,8 @@ Anything inside a source counts as backed up; projects outside every backup show
 | v0.3 | Stale detection, suggestions, one-click archive / restore |
 | v0.4 | 3D view, Show mode, Privacy mode |
 | v0.5 | Health dashboard, live updates from the NTFS change journal |
+| v0.6 | Project cards, Timeline |
+| v0.7+ | Ask Claude, NAS / other machines, `.scr` screensaver, installer / open-source release |
 
 ## License
 

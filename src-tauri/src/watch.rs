@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
 
-fn noise(path_lower: &str, own: &str) -> bool {
+pub(crate) fn noise(path_lower: &str, own: &str) -> bool {
     const SKIP: &[&str] = &[
         "\\appdata\\local\\temp", "\\$recycle.bin", "\\windows\\", "\\system volume information", "\\$extend",
         "\\programdata\\microsoft", "\\appdata\\local\\packages", "\\appdata\\local\\microsoft", "\\appdata\\roaming\\microsoft",

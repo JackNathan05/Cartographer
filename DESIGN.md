@@ -213,7 +213,8 @@ Rust is a good fit for the scanner and file actions (speed + safety).
 | **v0.3** | **Stale detection + Suggestions + one-click Archive / Restore** + action log. |
 | **v0.4** | **3D view + Show mode** + **Privacy mode**. |
 | **v0.5** | Health dashboard (replaces monthly report). Change-journal live updates. |
-| **v0.6+** | Ask Claude, Timeline, Project cards, NAS / other machines, `.scr` screensaver, open-source release. |
+| **v0.6** | **Project cards + Timeline.** |
+| **v0.7+** | Ask Claude, NAS / other machines, `.scr` screensaver, open-source release. |
 
 *(Show mode could move earlier if we want something to show off sooner.)*
 
@@ -298,3 +299,12 @@ Rust is a good fit for the scanner and file actions (speed + safety).
 | Live updates | Done, pragmatically: ReadDirectoryChangesW watchers (notify crate) on each NTFS drive mark it dirty (noise filtered); a background loop rescans one dirty drive at a time, at most every refresh_minutes, only after 60 s of no input. Tested: a new file in Documents triggered an automatic C: rescan after 81 s |
 | Not done | Reading the USN change journal for per-file incremental index updates (needs a permanently elevated helper); SMART temperature / wear (needs admin) |
 | Archive speed | Zipping and verification run on every CPU core (66.9 s -> 4.9 s on a 364 MB test) |
+
+### v0.6 status (2026-11-23)
+| Item | State |
+|---|---|
+| Project cards | Done (projects.rs): every project the map detects, with type tags from its files, README first line, size, last edit, live git state (branch, changed / new files, ahead / behind, last commit, GitHub link), backup coverage. Open in VS Code / Cursor, Explorer, Windows Terminal, GitHub, Space. Filters: all / git / needs a look; sort by last worked on / size / name |
+| Timeline | Done (history.rs): after each scan a snapshot of every folder >= 10 MB down to 7 levels (~4,000 rows for C:), one per drive per day, weekly after 2 weeks, max a year. Diffs list the most specific folder that explains each change >= 100 MB (new / grew / shrank / removed). Also installs (registry InstallDate + launcher folder dates) and big files (>= 50 MB) modified in the period, minus backup copies, virtual disks and noise |
+| Faster | Path lookups walk down from the drive root by folder name (parent index) instead of reading all 400k folders: Map build 4.4 s -> ~0.9 s; drive list cached for 5 s |
+| Fixed | v0.5 garbled the sidebar's special characters (UTF-8 read as cp1252); restored |
+| Next | Ask Claude, NAS / other machines, `.scr` screensaver, installer |

@@ -7,8 +7,10 @@ mod drives;
 mod graph;
 mod health;
 mod helper;
+mod history;
 mod idle;
 mod mft;
+mod projects;
 mod scan;
 mod watch;
 
@@ -106,7 +108,12 @@ fn begin_scan(app: &AppHandle, root: String) -> Result<(), String> {
             };
             flag.store(false, Ordering::SeqCst);
             match result {
-                Ok(scan_id) => { let _ = app.emit("scan-done", ScanDone { root, scan_id }); }
+                Ok(scan_id) => {
+                    if let Ok(mut c) = db::open(&db_path) {
+                        let _ = history::record(&mut c, scan_id);
+                    }
+                    let _ = app.emit("scan-done", ScanDone { root, scan_id });
+                }
                 Err(e) => { let _ = app.emit("scan-error", e); }
             }
         })
@@ -294,6 +301,37 @@ fn health_report(state: State<AppState>) -> Result<health::Report, String> {
     health::report(&c).map_err(err)
 }
 
+#[tauri::command(async)]
+fn timeline(state: State<AppState>, days: i64) -> Result<history::Timeline, String> {
+    let mut c = state.conn.lock().map_err(err)?;
+    history::report(&mut c, days).map_err(err)
+}
+
+#[tauri::command(async)]
+fn projects_report(state: State<AppState>) -> Result<projects::Report, String> {
+    let c = state.conn.lock().map_err(err)?;
+    projects::report(&c).map_err(err)
+}
+
+#[tauri::command(async)]
+fn open_in_editor(path: String) -> Result<(), String> {
+    projects::open_in_editor(&path)
+}
+
+#[tauri::command(async)]
+fn open_terminal(path: String) -> Result<(), String> {
+    projects::open_terminal(&path)
+}
+
+/// Opens a web page (a project's GitHub link) in the default browser.
+#[tauri::command(async)]
+fn open_url(url: String) -> Result<(), String> {
+    if !url.starts_with("https://") {
+        return Err("Only https links".into());
+    }
+    std::process::Command::new("explorer").raw_arg(format!("\"{}\"", url)).spawn().map(|_| ()).map_err(err)
+}
+
 /// The map's layout (forces, radiate/pull/push points, pinned and last positions).
 #[tauri::command(async)]
 fn load_layout() -> Option<serde_json::Value> {
@@ -457,6 +495,40 @@ fn main() {
             let _ = std::fs::write(out, cleanup::selftest(&dir));
             return;
         }
+        Some("--timeline-dump") => {
+            // `--timeline-dump out.json <days> [db]`: testing; pass a copy of the index as db
+            let out = args.get(2).cloned().unwrap_or_else(|| "timeline.json".into());
+            let days: i64 = args.get(3).and_then(|d| d.parse().ok()).unwrap_or(7);
+            let db = args.get(4).map(PathBuf::from).unwrap_or_else(|| helper::data_dir().join("index.db"));
+            if let Ok(mut c) = db::open(&db) {
+                let t = Instant::now();
+                let r = history::report(&mut c, days).map(|r| serde_json::to_value(&r).unwrap_or_default());
+                let v = match r { Ok(v) => serde_json::json!({ "ms": t.elapsed().as_millis() as u64, "report": v }), Err(e) => serde_json::json!({ "error": e.to_string() }) };
+                let _ = std::fs::write(out, serde_json::to_vec_pretty(&v).unwrap_or_default());
+            }
+            return;
+        }
+        Some("--snapshot") => {
+            // testing: `--snapshot <db> <scan_id> <time>` re-dates a scan and snapshots it (fake history on a copy)
+            let db = PathBuf::from(args.get(2).cloned().unwrap_or_default());
+            let scan: i64 = args.get(3).and_then(|d| d.parse().ok()).unwrap_or(0);
+            let time: i64 = args.get(4).and_then(|d| d.parse().ok()).unwrap_or(0);
+            if let Ok(mut c) = db::open(&db) {
+                let _ = c.execute("UPDATE scans SET started = ?1 WHERE id = ?2", rusqlite::params![time, scan]);
+                let _ = c.execute("UPDATE snapshots SET scan_id = -scan_id WHERE scan_id = ?1", [scan]); // keep the old one as history
+                let _ = history::record(&mut c, scan);
+            }
+            return;
+        }
+        Some("--projects-dump") => {
+            let out = args.get(2).cloned().unwrap_or_else(|| "projects.json".into());
+            if let Ok(c) = db::open(&helper::data_dir().join("index.db")) {
+                if let Ok(r) = projects::report(&c) {
+                    let _ = std::fs::write(out, serde_json::to_vec_pretty(&r).unwrap_or_default());
+                }
+            }
+            return;
+        }
         Some("--health-dump") => {
             let out = args.get(2).cloned().unwrap_or_else(|| "health.json".into());
             if let Ok(c) = db::open(&helper::data_dir().join("index.db")) {
@@ -486,6 +558,14 @@ fn main() {
             app.manage(AppState { db_path, conn: Mutex::new(conn), scanning: Arc::new(AtomicBool::new(false)), showing: showing.clone() });
             idle::start(app.handle().clone(), showing);
             watch::start(app.handle().clone(), begin_scan);
+            {
+                let db = app.state::<AppState>().db_path.clone();
+                std::thread::spawn(move || {
+                    if let Ok(mut c) = db::open(&db) {
+                        history::backfill(&mut c);
+                    }
+                });
+            }
 
             let open = MenuItem::with_id(app, "open", "Open Cartographer", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -513,7 +593,7 @@ fn main() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![drives, scans, view, graph, health_report, get_settings, set_settings, show_status, show_preview, show_exit, backup_report, cleanup_report, cleanup_hide, cleanup_unhide_all, cleanup_run, open_uninstall, load_layout, save_layout, reset_layout, is_scanning, start_scan, helper_status, set_fast_scan, reveal, open_path])
+        .invoke_handler(tauri::generate_handler![drives, scans, view, graph, health_report, get_settings, set_settings, show_status, show_preview, show_exit, backup_report, cleanup_report, cleanup_hide, cleanup_unhide_all, cleanup_run, open_uninstall, load_layout, save_layout, reset_layout, is_scanning, start_scan, helper_status, set_fast_scan, reveal, open_path, timeline, projects_report, open_in_editor, open_terminal, open_url])
         .build(tauri::generate_context!())
         .expect("error while building Cartographer");
 

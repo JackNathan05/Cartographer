@@ -23,7 +23,27 @@ fn from_wide(b: &[u16]) -> String {
     String::from_utf16_lossy(&b[..n])
 }
 
+/// Asking Windows about every drive takes ~0.6 s here (network / cloud drives answer slowly), and one
+/// report can ask several times, so answers are reused for a few seconds.
 pub fn list() -> Vec<Drive> {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    static CACHE: Mutex<Option<(Instant, Vec<Drive>)>> = Mutex::new(None);
+    if let Ok(c) = CACHE.lock() {
+        if let Some((t, v)) = c.as_ref() {
+            if t.elapsed() < Duration::from_secs(5) {
+                return v.clone();
+            }
+        }
+    }
+    let v = list_now();
+    if let Ok(mut c) = CACHE.lock() {
+        *c = Some((Instant::now(), v.clone()));
+    }
+    v
+}
+
+fn list_now() -> Vec<Drive> {
     let mut out = Vec::new();
     let mask = unsafe { GetLogicalDrives() };
     for i in 0..26u32 {
