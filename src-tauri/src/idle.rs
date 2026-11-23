@@ -134,7 +134,12 @@ pub fn open_show(app: &AppHandle) {
     if app.get_webview_window("show").is_some() {
         return;
     }
-    let _ = WebviewWindowBuilder::new(app, "show", WebviewUrl::App("index.html?mode=show".into()))
+    let mut b = WebviewWindowBuilder::new(app, "show", WebviewUrl::App("index.html?mode=show".into()));
+    if crate::screensaver::only() {
+        // own browser process, so it draws on the screensaver desktop this process runs on
+        b = b.data_directory(crate::screensaver::webview_dir());
+    }
+    let _ = b
         .title("Cartographer")
         .fullscreen(true)
         .decorations(false)
@@ -158,6 +163,14 @@ pub fn start(app: AppHandle, showing: Arc<AtomicBool>) {
         let mut idle_at_open = 0u64;
         let mut wait_for_input = false; // after a show times out, don't restart until you're back
         let mut last_obs = false;
+        let only = crate::screensaver::only();
+        if only {
+            // started by Windows as the screensaver: show right away, until you're back
+            open_show(&app);
+            shown_at = Some(Instant::now());
+            idle_at_open = idle_secs();
+            showing.store(true, Ordering::SeqCst);
+        }
         loop {
             std::thread::sleep(Duration::from_secs(2));
             let s = load();
@@ -169,31 +182,16 @@ pub fn start(app: AppHandle, showing: Arc<AtomicBool>) {
                 let _ = app.emit("obs-changed", obs);
             }
 
-            // Windows started Cartographer.scr: show now, whatever the idle setting says
-            if crate::screensaver::take_request() {
-                crate::screensaver::set_active(true);
-                if shown_at.is_some() {
-                    continue; // already showing (our own idle timer): the .scr waits until it closes
-                }
-                open_show(&app);
-                shown_at = Some(Instant::now());
-                idle_at_open = idle;
-                showing.store(true, Ordering::SeqCst);
-                wait_for_input = false;
-                continue;
-            }
-
             if let Some(t) = shown_at {
                 let window_gone = app.get_webview_window("show").is_none();
                 let input = idle < idle_at_open.saturating_sub(1) || idle < 2;
-                let timed_out = t.elapsed() >= Duration::from_secs(s.show_minutes as u64 * 60);
+                let timed_out = !only && t.elapsed() >= Duration::from_secs(s.show_minutes as u64 * 60);
                 if window_gone || input || timed_out {
                     close_show(&app);
                     shown_at = None;
                     showing.store(false, Ordering::SeqCst);
                     wait_for_input = timed_out && !input;
-                    crate::screensaver::set_active(false);
-                    if crate::screensaver::only() {
+                    if only {
                         app.exit(0); // started only as the screensaver
                     }
                 }
@@ -205,7 +203,11 @@ pub fn start(app: AppHandle, showing: Arc<AtomicBool>) {
                 }
                 continue;
             }
-            if s.show_enabled && idle >= s.idle_minutes as u64 * 60 && blocked_reason().is_none() {
+            if s.show_enabled
+                && idle >= s.idle_minutes as u64 * 60
+                && !crate::screensaver::windows_will_show() // Windows starts Cartographer.scr itself
+                && blocked_reason().is_none()
+            {
                 open_show(&app);
                 shown_at = Some(Instant::now());
                 idle_at_open = idle;

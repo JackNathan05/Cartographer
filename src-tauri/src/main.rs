@@ -692,12 +692,9 @@ fn main() {
     // Started by Windows as Cartographer.scr
     match screensaver::mode(args.get(1).map(|s| s.as_str())) {
         Some(screensaver::Mode::Preview) => return, // no tiny preview
-        Some(screensaver::Mode::Show) => {
-            if screensaver::hand_off() {
-                return; // the running Cartographer showed it
-            }
-            screensaver::ONLY.store(true, Ordering::SeqCst); // nothing running: be the screensaver ourselves
-        }
+        // Windows runs screensavers on their own desktop, where the tray app's windows can't be
+        // seen, so this process is the screensaver itself (see screensaver.rs)
+        Some(screensaver::Mode::Show) => screensaver::ONLY.store(true, Ordering::SeqCst),
         Some(screensaver::Mode::Configure) | None => {}
     }
     match args.get(1).map(|s| s.as_str()) {
@@ -836,19 +833,17 @@ fn main() {
         Some("--uninstall-helper") => std::process::exit(helper::uninstall()),
         _ => {}
     }
-    let app = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            // a late screensaver start shows the 3D map, not the main window
-            if matches!(screensaver::mode(args.get(1).map(|s| s.as_str())), Some(screensaver::Mode::Show)) {
-                idle::open_show(app);
-            } else {
-                show_main(app);
-            }
-        }))
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec!["--hidden"]),
-        ))
+    let mut builder = tauri::Builder::default();
+    if !screensaver::only() {
+        // the screensaver runs alongside the tray app, so it skips the one-instance rule
+        builder = builder
+            .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
+            .plugin(tauri_plugin_autostart::init(
+                tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+                Some(vec!["--hidden"]),
+            ));
+    }
+    let app = builder
         .setup(|app| {
             let dir = app.path().app_local_data_dir()?;
             std::fs::create_dir_all(&dir)?;
@@ -857,6 +852,10 @@ fn main() {
             let showing = Arc::new(AtomicBool::new(false));
             app.manage(AppState { db_path, conn: Mutex::new(conn), scanning: Arc::new(AtomicBool::new(false)), showing: showing.clone(), convo: Mutex::new(ask::Conversation::default()) });
             idle::start(app.handle().clone(), showing);
+            if screensaver::only() {
+                return Ok(()); // just Show mode: no tray, watcher or background work
+            }
+            screensaver::refresh_copy();
             watch::start(app.handle().clone(), begin_scan);
             {
                 let db = app.state::<AppState>().db_path.clone();
@@ -888,9 +887,7 @@ fn main() {
                 })
                 .build(app)?;
 
-            if screensaver::only() {
-                screensaver::request_now(); // the idle loop opens Show mode and quits when it closes
-            } else if !std::env::args().any(|a| a == "--hidden") {
+            if !std::env::args().any(|a| a == "--hidden") {
                 show_main(app.handle());
             }
             Ok(())

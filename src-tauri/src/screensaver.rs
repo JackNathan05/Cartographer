@@ -3,27 +3,27 @@
 //!
 //! A `.scr` is just this exe under another name. Windows runs it with:
 //!   /s        show the screensaver   /p <hwnd>  small preview (we skip it)   /c  settings
-//! For /s, the `.scr` asks the Cartographer already running in the tray to open Show mode (a request
-//! file it checks every 2 s) and stays alive until Show mode closes, which is what Windows expects.
-//! If Cartographer isn't running, the `.scr` starts it in screensaver-only mode and quits afterwards.
+//!
+//! Windows runs a screensaver on its own separate desktop ("Screen-saver"), so a window from the
+//! Cartographer already running in the tray (which lives on your normal desktop) can't be seen
+//! there: it was just black. So for /s this process draws Show mode itself, on the screensaver
+//! desktop, with its own WebView2 profile (a browser process shared with the tray app would
+//! belong to the other desktop), and quits on the first key press or mouse move.
 
 use crate::helper::data_dir;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
 
 /// This process was started by Windows as the screensaver and should quit when Show mode closes.
 pub static ONLY: AtomicBool = AtomicBool::new(false);
 
-fn request_file() -> PathBuf {
-    data_dir().join("screensaver-request")
-}
-pub fn active_file() -> PathBuf {
-    data_dir().join("screensaver-active")
-}
-
 pub fn scr_path() -> PathBuf {
     data_dir().join("Cartographer.scr")
+}
+
+/// WebView2 profile for the screensaver process, separate from the tray app's.
+pub fn webview_dir() -> PathBuf {
+    data_dir().join("EBWebView-screensaver")
 }
 
 /// What Windows asked for, from the first argument ("/s", "/S", "/p 1234", "/c:5678").
@@ -46,46 +46,6 @@ pub fn mode(arg: Option<&str>) -> Option<Mode> {
     }
 }
 
-/// `/s`: hand off to the running app and wait while Show mode is up. Returns false when no
-/// running Cartographer answered, so the caller starts one in screensaver-only mode.
-pub fn hand_off() -> bool {
-    let _ = std::fs::create_dir_all(data_dir());
-    let _ = std::fs::remove_file(active_file());
-    if std::fs::write(request_file(), crate::cleanup::now().to_string()).is_err() {
-        return false;
-    }
-    let t0 = Instant::now();
-    while !active_file().exists() {
-        if t0.elapsed() > Duration::from_secs(6) {
-            let _ = std::fs::remove_file(request_file());
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    // Show mode is up: stay alive until it closes (or 6 h, as a safety net)
-    while active_file().exists() && t0.elapsed() < Duration::from_secs(6 * 3600) {
-        std::thread::sleep(Duration::from_millis(500));
-    }
-    true
-}
-
-/// Called from the idle loop: was a fresh screensaver request left for us?
-pub fn take_request() -> bool {
-    let p = request_file();
-    let Ok(s) = std::fs::read_to_string(&p) else { return false };
-    let _ = std::fs::remove_file(&p);
-    let t: i64 = s.trim().parse().unwrap_or(0);
-    crate::cleanup::now() - t < 15
-}
-
-pub fn set_active(on: bool) {
-    if on {
-        let _ = std::fs::write(active_file(), b"1");
-    } else {
-        let _ = std::fs::remove_file(active_file());
-    }
-}
-
 /// Copies this exe to Cartographer.scr and opens Windows' Screen Saver Settings with it selected;
 /// you confirm there (Windows' own dialog makes the actual change).
 pub fn install() -> Result<String, String> {
@@ -101,22 +61,38 @@ pub fn install() -> Result<String, String> {
     Ok(scr.to_string_lossy().into_owned())
 }
 
+/// After Cartographer is updated, Cartographer.scr is still the old copy: refresh it (on startup
+/// of the tray app). Skipped while the screensaver is running (the file is in use).
+pub fn refresh_copy() {
+    let scr = scr_path();
+    let Ok(me) = std::env::current_exe() else { return };
+    let (Ok(a), Ok(b)) = (std::fs::metadata(&me), std::fs::metadata(&scr)) else { return };
+    if a.len() != b.len() || a.modified().ok() != b.modified().ok() {
+        let _ = std::fs::copy(&me, &scr);
+    }
+}
+
+fn desktop_key() -> Option<winreg::RegKey> {
+    use winreg::enums::HKEY_CURRENT_USER;
+    winreg::RegKey::predef(HKEY_CURRENT_USER).open_subkey(r"Control Panel\Desktop").ok()
+}
+
 /// Is Windows currently set to use Cartographer as its screensaver?
 pub fn installed() -> bool {
-    use winreg::enums::HKEY_CURRENT_USER;
-    let Ok(k) = winreg::RegKey::predef(HKEY_CURRENT_USER).open_subkey(r"Control Panel\Desktop") else { return false };
+    let Some(k) = desktop_key() else { return false };
     let v: String = k.get_value("SCRNSAVE.EXE").unwrap_or_default();
     let v = v.to_lowercase();
     // Windows may store the short 8.3 name (CARTOG~1.SCR)
     v.ends_with("cartographer.scr") || (v.ends_with(".scr") && v.rsplit('\\').next().map_or(false, |n| n.starts_with("cartog")))
 }
 
-pub fn only() -> bool {
-    ONLY.load(Ordering::SeqCst)
+/// Windows will start Cartographer as the screensaver by itself, so the tray app's own idle timer
+/// should stay out of the way (it would open a second Show mode hidden behind the first).
+pub fn windows_will_show() -> bool {
+    let active = desktop_key().and_then(|k| k.get_value::<String, _>("ScreenSaveActive").ok()).map_or(false, |v| v.trim() == "1");
+    active && installed()
 }
 
-/// Leaves a request for the idle loop (used when this process is the screensaver itself).
-pub fn request_now() {
-    let _ = std::fs::create_dir_all(data_dir());
-    let _ = std::fs::write(request_file(), crate::cleanup::now().to_string());
+pub fn only() -> bool {
+    ONLY.load(Ordering::SeqCst)
 }
