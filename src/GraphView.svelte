@@ -131,7 +131,7 @@
     };
     pinnedCount = Object.keys(layout.pinned).length;
     graph = buildGraph();
-    engine = createLayout(data, layout, onTick);
+    engine = createLayout(data, layout, onTick, nodeSize);
     if (!Object.keys(layout.positions).length) {
       // settle most of the way before the first frame so the map doesn't explode on screen
       engine.sim.stop();
@@ -380,6 +380,10 @@
       defaultDrawNodeLabel: drawLabel,
       defaultDrawNodeHover: drawHover,
       zIndex: true,
+      // dot sizes are in the same units as positions, so what you see is what the layout
+      // measures: if the layout says two dots don't overlap, they don't at any zoom
+      itemSizesReference: 'positions',
+      zoomToSizeRatioFunction: (x) => x,
       stagePadding: 40,
       minCameraRatio: 0.05,
       maxCameraRatio: 4,

@@ -68,7 +68,7 @@ function hash(s) {
  * @param layout saved layout (see defaultLayout)
  * @param onTick called after every simulation step
  */
-export function createLayout(data, layout, onTick) {
+export function createLayout(data, layout, onTick, radiusOf = () => 6) {
   const parentOf = new Map();
   for (const l of data.links) if (l.kind === 'lives_on') parentOf.set(l.source, l.target);
   const driveOf = (id) => {
@@ -89,6 +89,7 @@ export function createLayout(data, layout, onTick) {
     size: n.size,
     drive: driveOf(n.id),
     depth: depthOf(n.id),
+    r: radiusOf(n), // drawn radius, in the same units as positions
   }));
   const byId = new Map(nodes.map((n) => [n.id, n]));
 
@@ -231,7 +232,7 @@ export function createLayout(data, layout, onTick) {
     }
     // 2. dots on other branches' lines
     for (const n of nodes) {
-      const r = 10 + Math.min(18, Math.sqrt(Math.max(n.size, 0) / 1073741824) * 2.2);
+      const r = n.r + 6;
       for (const [a, b] of S) {
         if (n === a || n === b) continue;
         const ex = b.x - a.x, ey = b.y - a.y;
@@ -249,6 +250,108 @@ export function createLayout(data, layout, onTick) {
         nudge(a, -dx * f * 0.25, -dy * f * 0.25);
         nudge(b, -dx * f * 0.25, -dy * f * 0.25);
       }
+    }
+  }
+
+  // Untangle at full strength is a hard rule: after every simulation step, positions are
+  // corrected directly so that (1) no two branch lines cross, (2) no dot sits on a line it
+  // isn't part of, and (3) no two dots overlap. Pinned dots never move.
+  const free = (n) => n.fx == null;
+  function hit(a, b, c, d) {
+    const den = (b.x - a.x) * (d.y - c.y) - (b.y - a.y) * (d.x - c.x);
+    if (Math.abs(den) < 1e-9) return null;
+    const t = ((c.x - a.x) * (d.y - c.y) - (c.y - a.y) * (d.x - c.x)) / den;
+    const u = ((c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x)) / den;
+    if (t <= 0 || t >= 1 || u <= 0 || u >= 1) return null;
+    return { x: a.x + t * (b.x - a.x), y: a.y + t * (b.y - a.y) };
+  }
+  function resolve() {
+    const S = segs(); // [child, parent]
+    for (let pass = 0; pass < 4; pass++) {
+      // 1. crossing lines: pull one child back toward its parent, short of the crossing
+      for (let i = 0; i < S.length; i++) {
+        for (let j = i + 1; j < S.length; j++) {
+          const [a, b] = S[i], [c, d] = S[j];
+          if (a === c || a === d || b === c || b === d) continue;
+          const I = hit(a, b, c, d);
+          if (!I) continue;
+          const da = Math.hypot(a.x - I.x, a.y - I.y), dc = Math.hypot(c.x - I.x, c.y - I.y);
+          let [child, par] = free(a) && (!free(c) || da <= dc) ? [a, b] : [c, d];
+          if (!free(child)) continue;
+          child.x = par.x + (I.x - par.x) * 0.85;
+          child.y = par.y + (I.y - par.y) * 0.85;
+        }
+      }
+      // 2. dots sitting on other lines
+      for (const n of nodes) {
+        if (!free(n)) continue;
+        const need = n.r + 3;
+        for (const [a, b] of S) {
+          if (n === a || n === b) continue;
+          const ex = b.x - a.x, ey = b.y - a.y;
+          const L2 = ex * ex + ey * ey;
+          if (L2 < 1e-6) continue;
+          const t = ((n.x - a.x) * ex + (n.y - a.y) * ey) / L2;
+          if (t <= 0 || t >= 1) continue;
+          const px = a.x + ex * t, py = a.y + ey * t;
+          let dx = n.x - px, dy = n.y - py;
+          let dist = Math.hypot(dx, dy);
+          if (dist >= need) continue;
+          if (dist < 1e-6) { dx = -ey; dy = ex; dist = Math.hypot(dx, dy); }
+          n.x = px + (dx / dist) * need;
+          n.y = py + (dy / dist) * need;
+        }
+      }
+      // 3. overlapping dots
+      for (let i = 0; i < nodes.length; i++) {
+        const a = nodes[i];
+        for (let j = i + 1; j < nodes.length; j++) {
+          const b = nodes[j];
+          const fa = free(a), fb = free(b);
+          if (!fa && !fb) continue;
+          let dx = b.x - a.x, dy = b.y - a.y;
+          let dist = Math.hypot(dx, dy);
+          const min = a.r + b.r + 3;
+          if (dist >= min) continue;
+          if (dist < 1e-6) { dx = 1; dy = 0; dist = 1; }
+          const over = min - dist, ux = dx / dist, uy = dy / dist;
+          const sa = fa && fb ? 0.5 : fa ? 1 : 0, sb = fa && fb ? 0.5 : fb ? 1 : 0;
+          a.x -= ux * over * sa; a.y -= uy * over * sa;
+          b.x += ux * over * sb; b.y += uy * over * sb;
+        }
+      }
+    }
+  }
+
+  // Straighten at full strength is a hard rule: each node's biggest child sits exactly
+  // across (180 degrees) from its root branch, keeping its current distance. Done from
+  // the drives outward so whole chains line up. Pinned dots never move.
+  const byDepth = [...kidsOf.keys()].map((id) => byId.get(id)).filter(Boolean).sort((a, b) => a.depth - b.depth);
+  function rootOf(n) {
+    const aimed = layout.aim?.[n.id] && layout.points.find((p) => p.id === layout.aim[n.id]);
+    if (aimed) return aimed;
+    const par = parentOf.get(n.id);
+    if (par && byId.has(par)) return byId.get(par);
+    let best = null, bd = Infinity;
+    for (const p of layout.points) {
+      if (p.type !== 'radiate') continue;
+      const d = (n.x - p.x) ** 2 + (n.y - p.y) ** 2;
+      if (d < bd) { bd = d; best = p; }
+    }
+    return best;
+  }
+  function snapStraight() {
+    for (const n of byDepth) {
+      const c = kidsOf.get(n.id)?.[0];
+      if (!c || !free(c)) continue;
+      const root = rootOf(n);
+      if (!root) continue;
+      let ux = n.x - root.x, uy = n.y - root.y;
+      const ul = Math.hypot(ux, uy);
+      if (ul < 1e-6) continue;
+      ux /= ul; uy /= ul;
+      const dist = Math.max(Math.hypot(c.x - n.x, c.y - n.y), n.r + c.r + 6);
+      c.x = n.x + ux * dist; c.y = n.y + uy * dist;
     }
   }
 
@@ -274,7 +377,7 @@ export function createLayout(data, layout, onTick) {
   const sim = forceSimulation(nodes)
     .force('link', link)
     .force('charge', charge)
-    .force('collide', forceCollide((d) => (d.kind === 'drive' ? 40 : 4 + Math.min(18, Math.sqrt(Math.max(d.size, 0) / 1073741824) * 2.2))).strength(0.9))
+    .force('collide', forceCollide((d) => d.r + 3).strength(0.9))
     .force('driveRepel', driveRepel)
     .force('radiate', radiate)
     .force('points', points)
@@ -283,7 +386,13 @@ export function createLayout(data, layout, onTick) {
     .force('gx', forceX(0))
     .force('gy', forceY(0))
     .alphaDecay(0.03)
-    .on('tick', () => onTick?.());
+    .on('tick', () => {
+      const hardStraight = s().straighten >= 0.99, hardUntangle = s().untangle >= 0.99;
+      if (hardStraight) snapStraight();
+      if (hardUntangle) resolve();
+      if (hardStraight) snapStraight();
+      onTick?.();
+    });
 
   function apply() {
     const st = s();
