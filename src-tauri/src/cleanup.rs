@@ -79,6 +79,9 @@ pub struct State {
 }
 
 fn state_path() -> PathBuf {
+    if let Ok(p) = std::env::var("CARTOGRAPHER_STATE_FILE") {
+        return PathBuf::from(p); // self-test only: never touches your real log
+    }
     data_dir().join("cleanup.json")
 }
 
@@ -472,60 +475,159 @@ pub fn archive(path: &str, item_kind: &str, prog: &Progress) -> Result<Action, S
     }
     let total: u64 = files.iter().map(|f| f.2).sum();
 
-    // 2. write the zip
+    // 2. write the zip, using every CPU core: files are split into balanced batches (biggest
+    //    first, each to the lightest batch), every core compresses its batch into its own part
+    //    file at the same time, then the parts are joined into the final zip by copying the
+    //    already-compressed data (nothing is compressed twice).
+    let threads = std::env::var("CARTOGRAPHER_ZIP_THREADS") // testing only: force a core count
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4))
+        .clamp(1, 32);
+    let mut order: Vec<usize> = (0..files.len()).collect();
+    order.sort_by(|&x, &y| files[y].2.cmp(&files[x].2));
+    let mut batches: Vec<(u64, Vec<usize>)> = vec![(0, Vec::new()); threads.min(files.len().max(1))];
+    for i in order {
+        let lightest = batches.iter_mut().min_by_key(|b| b.0).unwrap();
+        lightest.0 += files[i].2.max(1);
+        lightest.1.push(i);
+    }
+    let parts: Vec<PathBuf> = (0..batches.len()).map(|k| zip_path.with_extension(format!("zip.part{k}"))).collect();
+    let cleanup_parts = |parts: &[PathBuf]| {
+        for p in parts {
+            let _ = std::fs::remove_file(p);
+        }
+    };
+    let done = std::sync::atomic::AtomicU64::new(0);
+    let failed = std::sync::Mutex::new(None::<String>);
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated).large_file(true);
+    std::thread::scope(|sc| {
+        for (k, (_, idx)) in batches.iter().enumerate() {
+            let (part, files, done, failed, stop) = (&parts[k], &files, &done, &failed, &stop);
+            sc.spawn(move || {
+                let r = (|| -> Result<(), String> {
+                    let f = File::create(part).map_err(|e| e.to_string())?;
+                    let mut zw = zip::ZipWriter::new(io::BufWriter::with_capacity(1 << 20, f));
+                    let mut buf = vec![0u8; 1 << 20];
+                    for &i in idx {
+                        if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                            return Ok(());
+                        }
+                        let (p, rel, _) = &files[i];
+                        zw.start_file(rel.as_str(), opts).map_err(|e| e.to_string())?;
+                        let mut r = File::open(p).map_err(|e| format!("Couldn't open {rel}: {e} (is it open in another app?)"))?;
+                        loop {
+                            let n = r.read(&mut buf).map_err(|e| format!("Couldn't read {rel}: {e}"))?;
+                            if n == 0 {
+                                break;
+                            }
+                            zw.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+                            done.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
+                    let mut inner = zw.finish().map_err(|e| e.to_string())?;
+                    inner.flush().map_err(|e| e.to_string())?;
+                    Ok(())
+                })();
+                if let Err(e) = r {
+                    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                    failed.lock().unwrap().get_or_insert(e);
+                }
+            });
+        }
+        // progress from this thread while the workers run
+        loop {
+            let d = done.load(std::sync::atomic::Ordering::Relaxed);
+            (prog.report)(&format!("zipping on {} cores", batches.len()), d.min(total), total);
+            if d >= total || stop.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(150));
+        }
+    });
+    if let Some(e) = failed.into_inner().unwrap() {
+        cleanup_parts(&parts);
+        let _ = std::fs::remove_file(&zip_path);
+        return Err(format!("Archiving stopped, nothing was removed. {e}"));
+    }
+    (prog.report)("joining the parts", total, total);
     let result = (|| -> Result<(), String> {
         let f = File::create(&zip_path).map_err(|e| e.to_string())?;
         let mut zw = zip::ZipWriter::new(io::BufWriter::with_capacity(1 << 20, f));
-        let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated).large_file(true);
         for d in &dirs {
             zw.add_directory(d.as_str(), opts).map_err(|e| e.to_string())?;
         }
-        let mut done = 0u64;
-        let mut buf = vec![0u8; 1 << 20];
-        for (p, rel, _) in &files {
-            zw.start_file(rel.as_str(), opts).map_err(|e| e.to_string())?;
-            let mut r = File::open(p).map_err(|e| format!("Couldn't open {rel}: {e} (is it open in another app?)"))?;
-            loop {
-                let n = r.read(&mut buf).map_err(|e| format!("Couldn't read {rel}: {e}"))?;
-                if n == 0 {
-                    break;
-                }
-                zw.write_all(&buf[..n]).map_err(|e| e.to_string())?;
-                done += n as u64;
-                (prog.report)("zipping", done, total);
-            }
+        for part in &parts {
+            let za = zip::ZipArchive::new(File::open(part).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+            zw.merge_archive(za).map_err(|e| e.to_string())?;
         }
         let mut inner = zw.finish().map_err(|e| e.to_string())?;
         inner.flush().map_err(|e| e.to_string())?;
         Ok(())
     })();
+    cleanup_parts(&parts);
     if let Err(e) = result {
         let _ = std::fs::remove_file(&zip_path);
         return Err(format!("Archiving stopped, nothing was removed. {e}"));
     }
 
-    // 3. verify: every file present, same sizes, CRC checked by reading it back
+    // 3. verify (also on every core): every file present, same sizes, CRC checked by reading
+    //    each one back. Each core opens the zip and checks its share of the entries.
     (prog.report)("checking the zip", 0, total);
     let verify = (|| -> Result<(), String> {
-        let mut za = zip::ZipArchive::new(File::open(&zip_path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        let n_entries = zip::ZipArchive::new(File::open(&zip_path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?.len();
         let want: HashMap<&str, u64> = files.iter().map(|(_, r, l)| (r.as_str(), *l)).collect();
-        let mut seen = 0usize;
-        let mut done = 0u64;
-        for i in 0..za.len() {
-            let mut zf = za.by_index(i).map_err(|e| e.to_string())?;
-            if zf.is_dir() {
-                continue;
+        let seen = std::sync::atomic::AtomicUsize::new(0);
+        let checked = std::sync::atomic::AtomicU64::new(0);
+        let bad = std::sync::Mutex::new(None::<String>);
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let workers = threads.min(n_entries.max(1));
+        std::thread::scope(|sc| {
+            for w in 0..workers {
+                let (want, seen, checked, bad, stop, zp) = (&want, &seen, &checked, &bad, &stop, &zip_path);
+                sc.spawn(move || {
+                    let r = (|| -> Result<(), String> {
+                        let mut za = zip::ZipArchive::new(File::open(zp).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+                        let mut i = w;
+                        while i < n_entries {
+                            if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                                return Ok(());
+                            }
+                            let mut zf = za.by_index(i).map_err(|e| e.to_string())?;
+                            if !zf.is_dir() {
+                                let name = zf.name().to_string();
+                                let expect = *want.get(name.as_str()).ok_or_else(|| format!("unexpected entry {name}"))?;
+                                let n = io::copy(&mut zf, &mut io::sink()).map_err(|e| format!("{name} failed its check: {e}"))?;
+                                if n != expect {
+                                    return Err(format!("{name}: {n} bytes in the zip, {expect} on disk"));
+                                }
+                                seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                checked.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+                            }
+                            i += workers;
+                        }
+                        Ok(())
+                    })();
+                    if let Err(e) = r {
+                        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                        bad.lock().unwrap().get_or_insert(e);
+                    }
+                });
             }
-            let name = zf.name().to_string();
-            let expect = *want.get(name.as_str()).ok_or_else(|| format!("unexpected entry {name}"))?;
-            let n = io::copy(&mut zf, &mut io::sink()).map_err(|e| format!("{name} failed its check: {e}"))?;
-            if n != expect {
-                return Err(format!("{name}: {n} bytes in the zip, {expect} on disk"));
+            loop {
+                let c = checked.load(std::sync::atomic::Ordering::Relaxed);
+                (prog.report)("checking the zip", c.min(total), total);
+                if c >= total || stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(150));
             }
-            seen += 1;
-            done += n;
-            (prog.report)("checking the zip", done, total);
+        });
+        if let Some(e) = bad.into_inner().unwrap() {
+            return Err(e);
         }
+        let seen = seen.into_inner();
         if seen != files.len() {
             return Err(format!("{seen} files in the zip, {} on disk", files.len()));
         }
@@ -627,6 +729,7 @@ pub fn selftest(archive_to: &str) -> String {
     use std::fmt::Write as _;
     let mut log = String::new();
     std::env::set_var("CARTOGRAPHER_ARCHIVE_DIR", archive_to);
+    std::env::set_var("CARTOGRAPHER_STATE_FILE", PathBuf::from(archive_to).join("selftest-cleanup.json"));
     let docs = format!(r"{}\Documents", norm(&std::env::var("USERPROFILE").unwrap_or_default()));
     let src = PathBuf::from(format!(r"{docs}\_cartographer_selftest_{}", now()));
     let mut seed: u64 = 0x9E3779B97F4A7C15;

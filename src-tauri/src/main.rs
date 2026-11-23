@@ -414,6 +414,27 @@ fn main() {
             }
             return;
         }
+        Some("--archive-bench") => {
+            // testing only: archive + restore a throwaway folder, report the time
+            let (src, dir, out) = (args.get(2).cloned().unwrap_or_default(), args.get(3).cloned().unwrap_or_default(), args.get(4).cloned().unwrap_or_else(|| "bench.txt".into()));
+            std::env::set_var("CARTOGRAPHER_ARCHIVE_DIR", &dir);
+            std::env::set_var("CARTOGRAPHER_STATE_FILE", std::path::Path::new(&dir).join("bench-cleanup.json"));
+            let quiet = |_: &str, _: u64, _: u64| {};
+            let prog = cleanup::Progress { report: &quiet };
+            let t = Instant::now();
+            let res = match cleanup::archive(&src, "project", &prog) {
+                Ok(a) => {
+                    let arch = t.elapsed().as_secs_f64();
+                    let t2 = Instant::now();
+                    let r = cleanup::restore(&a.id, &prog);
+                    format!("cores={} files={} bytes={} zip={} archive+verify={:.1}s restore={:.1}s restore_ok={}\n",
+                        std::env::var("CARTOGRAPHER_ZIP_THREADS").unwrap_or_else(|_| "all".into()), a.files, a.bytes, a.zip_bytes, arch, t2.elapsed().as_secs_f64(), r.is_ok())
+                }
+                Err(e) => format!("FAIL {e}\n"),
+            };
+            let _ = std::fs::OpenOptions::new().create(true).append(true).open(out).and_then(|mut f| { use std::io::Write; f.write_all(res.as_bytes()) });
+            return;
+        }
         Some("--cleanup-selftest") => {
             let dir = args.get(2).cloned().unwrap_or_else(|| "selftest-archive".into());
             let out = args.get(3).cloned().unwrap_or_else(|| "selftest.txt".into());
