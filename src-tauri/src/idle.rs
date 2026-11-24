@@ -67,6 +67,58 @@ pub fn save(s: &Settings) -> Result<(), String> {
     std::fs::write(path(), serde_json::to_vec_pretty(s).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
 }
 
+/// When Cartographer is the Windows screensaver: quit the instant you're back. Windows only
+/// returns to your desktop once the screensaver process has ended, so this ends it right away
+/// (no window teardown) on any key, click or scroll, or a mouse move of more than a few pixels
+/// (a bumped desk doesn't count). Checks every 30 ms.
+pub fn quit_on_input() {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    std::thread::spawn(|| {
+        let last_input = || {
+            let mut li = LASTINPUTINFO { cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
+            unsafe { GetLastInputInfo(&mut li) };
+            li.dwTime
+        };
+        let cursor = || {
+            let mut p = POINT { x: 0, y: 0 };
+            unsafe { GetCursorPos(&mut p) };
+            (p.x, p.y)
+        };
+        // troubleshooting: create "scr-debug" in the data folder to log what this loop sees
+        let dbg = data_dir().join("scr-debug").exists();
+        let t_start = Instant::now();
+        let log = |m: String| {
+            if dbg {
+                use std::io::Write;
+                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(data_dir().join("scr-debug.log")) {
+                    let _ = writeln!(f, "{:>7} ms  {m}", t_start.elapsed().as_millis());
+                }
+            }
+        };
+        std::thread::sleep(Duration::from_millis(1000)); // let the desktop switch settle
+        let base = cursor();
+        let (mut tick, mut prev) = (last_input(), base);
+        log(format!("watching: last input {tick}, cursor {base:?}"));
+        loop {
+            std::thread::sleep(Duration::from_millis(30));
+            let t = last_input();
+            if t == tick {
+                continue;
+            }
+            let cur = cursor();
+            let from_base = (((cur.0 - base.0) as f64).powi(2) + ((cur.1 - base.1) as f64).powi(2)).sqrt();
+            log(format!("input at {t} (now {}): cursor {cur:?}, {from_base:.0} px from start", unsafe { GetTickCount() }));
+            // input with the pointer not moving = a key, click or scroll
+            if cur == prev || from_base > 8.0 {
+                log("quitting".into());
+                crate::screensaver::quit_now();
+            }
+            (tick, prev) = (t, cur);
+        }
+    });
+}
+
 /// Seconds since the last keyboard / mouse input anywhere on the PC.
 pub fn idle_secs() -> u64 {
     let mut li = LASTINPUTINFO { cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
@@ -170,6 +222,7 @@ pub fn start(app: AppHandle, showing: Arc<AtomicBool>) {
             shown_at = Some(Instant::now());
             idle_at_open = idle_secs();
             showing.store(true, Ordering::SeqCst);
+            quit_on_input();
         }
         loop {
             std::thread::sleep(Duration::from_secs(2));
@@ -192,7 +245,7 @@ pub fn start(app: AppHandle, showing: Arc<AtomicBool>) {
                     showing.store(false, Ordering::SeqCst);
                     wait_for_input = timed_out && !input;
                     if only {
-                        app.exit(0); // started only as the screensaver
+                        crate::screensaver::quit_now(); // started only as the screensaver
                     }
                 }
                 continue;

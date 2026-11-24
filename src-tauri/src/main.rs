@@ -502,6 +502,9 @@ fn show_preview(app: AppHandle) {
 
 #[tauri::command(async)]
 fn show_exit(app: AppHandle) {
+    if screensaver::only() {
+        screensaver::quit_now(); // as the Windows screensaver: Windows switches back the moment we're gone
+    }
     idle::close_show(&app);
 }
 
@@ -694,7 +697,10 @@ fn main() {
         Some(screensaver::Mode::Preview) => return, // no tiny preview
         // Windows runs screensavers on their own desktop, where the tray app's windows can't be
         // seen, so this process is the screensaver itself (see screensaver.rs)
-        Some(screensaver::Mode::Show) => screensaver::ONLY.store(true, Ordering::SeqCst),
+        Some(screensaver::Mode::Show) => {
+            screensaver::ONLY.store(true, Ordering::SeqCst);
+            screensaver::end_children_with_us(); // so waking up is instant
+        }
         Some(screensaver::Mode::Configure) | None => {}
     }
     match args.get(1).map(|s| s.as_str()) {

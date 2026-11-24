@@ -93,6 +93,42 @@ pub fn windows_will_show() -> bool {
     active && installed()
 }
 
+/// Windows only switches back to your desktop once every process on the screensaver desktop has
+/// gone, including the WebView2 browser processes this one starts, which can otherwise linger
+/// for seconds after we quit. Putting ourselves in a job that kills everything in it when it
+/// closes (i.e. when this process exits) makes them all end at once.
+pub fn end_children_with_us() {
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    unsafe {
+        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        if job.is_null() {
+            return;
+        }
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const _,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        );
+        AssignProcessToJobObject(job, GetCurrentProcess());
+        // the handle stays open for the life of the process; closing it at exit ends the job
+    }
+}
+
+/// Ends this process immediately: no shutdown work (which can take a second or two with WebView2
+/// loaded) and, through the job above, its browser processes go with it.
+pub fn quit_now() -> ! {
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
+    unsafe { TerminateProcess(GetCurrentProcess(), 0) };
+    std::process::exit(0)
+}
+
 pub fn only() -> bool {
     ONLY.load(Ordering::SeqCst)
 }
